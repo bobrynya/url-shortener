@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - URL Shortener{% endblock %}
+
+{% block header %}
+<div class="header">
+    <h1>URL Shortener</h1>
+    <a href="/dashboard/links" class="btn btn-secondary">All Links →</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Create Links Form -->
+<div class="form-section">
+    <h2>Create Short Links</h2>
+    <form id="createLinksForm">
+        <div id="linkFieldsContainer">
+            <!-- Fields will be dynamically added via JS -->
+        </div>
+
+        <div class="form-actions">
+            <button type="button" id="addLinkFieldBtn" class="btn btn-secondary">
+                + Add Another Link
+            </button>
+            <button type="submit" class="btn">
+                Create All Links
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- Creation Results -->
+<div id="createResult"></div>
+
+<!-- Recently Created Links -->
+<div class="table-container">
+    <h2>Recently Created Links</h2>
+    <div id="recentLinks">
+        <div class="loading">Loading...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Initialize Dashboard on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        Dashboard.init();
+    });
+</script>
+{% endblock %}

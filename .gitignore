@@ -20,3 +20,19 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 target/
+
+# Coverage reports
+coverage/
+*.profraw
+tarpaulin-report.html
+cobertura.xml
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.test
+.env.*.local
+
+# Keep example
+!.env.example

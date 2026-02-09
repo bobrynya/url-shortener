@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Login - URL Shortener{% endblock %}
+
+{% block header %}{% endblock %}
+
+{% block content %}
+<div class="login-card">
+    <h1>🔐 Dashboard Login</h1>
+
+    <form id="loginForm">
+        <div class="form-group">
+            <label for="token">API Token</label>
+            <input type="password"
+                   id="token"
+                   name="token"
+                   required
+                   placeholder="Enter your token"
+                   autocomplete="off">
+            <small>You can get a token from the administrator</small>
+        </div>
+
+        <button type="submit" class="btn">
+            Login
+        </button>
+    </form>
+
+    <div id="error" style="display: none;" class="error"></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.body.classList.add('login-page');
+
+    document.addEventListener('DOMContentLoaded', () => {
+        Login.init();
+    });
+</script>
+{% endblock %}

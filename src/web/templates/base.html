@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}URL Shortener{% endblock %}</title>
+
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
+
+    {% block extra_styles %}{% endblock %}
+</head>
+<body>
+<div class="container">
+    {% block breadcrumb %}{% endblock %}
+
+    {% block header %}
+    <div class="header">
+        <h1>URL Shortener</h1>
+        <div class="header-actions">
+            <a href="/dashboard" class="btn btn-secondary">Dashboard</a>
+            <a href="/dashboard/links" class="btn btn-secondary">All Links</a>
+            <button onclick="Auth.logout()" class="btn btn-danger btn-sm">
+                🚪 Logout
+            </button>
+        </div>
+    </div>
+    {% endblock %}
+
+    {% block content %}{% endblock %}
+</div>
+
+<script src="/static/js/shortener.js"></script>
+
+{% block extra_scripts %}{% endblock %}
+</body>
+</html>

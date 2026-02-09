@@ -1,29 +1,66 @@
-# ---------- build stage ----------
-FROM rust:1.75-bookworm AS builder
+# ---------- chef stage ----------
+FROM rust:1.93-bookworm AS chef
 WORKDIR /app
+RUN cargo install cargo-chef
 
-# Кешируем зависимости
+# ---------- planner stage ----------
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---------- builder stage ----------
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+
+# Build only dependencies (cached)
+RUN cargo chef cook --release --recipe-path recipe.json
+
+# Copy actual code and resources
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
+COPY .sqlx ./.sqlx
 
-# Если используешь sqlx::query! (compile-time проверка), то:
-# - Либо собирай с подготовленным кэшем (.sqlx) + SQLX_OFFLINE=true
-# - Либо обеспечь DATABASE_URL во время сборки (сложнее в docker build)
-# Здесь пойдём по простому пути: build без оффлайн-кэша НЕ гарантирован.
-RUN cargo build --release
+# Copy templates
+RUN mkdir -p templates
+COPY src/web/templates ./templates
+
+# Build with offline mode
+ENV SQLX_OFFLINE=true
+RUN cargo build --release --bin url-shortener
+
+# Strip binary to reduce size
+RUN strip target/release/url-shortener
 
 # ---------- runtime stage ----------
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
-# (опционально) ca-certificates нужны для исходящих https-запросов, и иногда для TLS-драйверов
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-COPY --from=builder /app/target/release/mcz-url-shortener /app/mcz-url-shortener
-COPY migrations /app/migrations
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
 
-ENV LISTEN=0.0.0.0:3000
-EXPOSE 3000
+# Copy binary from builder
+COPY --from=builder /app/target/release/url-shortener /app/url-shortener
 
-CMD ["/app/mcz-url-shortener"]
+# Copy runtime resources
+COPY static /app/static
+
+# Set ownership
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+ENV LISTEN=0.0.0.0:8000
+EXPOSE 8000
+
+CMD ["/app/url-shortener"]

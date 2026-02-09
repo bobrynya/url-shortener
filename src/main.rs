@@ -1,52 +1,49 @@
-mod domain;
-mod dto;
-mod error;
-mod handlers;
-mod middlewares;
-mod routes;
-mod state;
-mod utils;
+//! Binary entry point for the URL shortener service.
+//!
+//! Initializes logging, loads configuration, and starts the HTTP server.
 
-use crate::domain::{click_event::ClickEvent, click_worker::run_click_worker};
-use crate::{routes::app_router, state::AppState};
-use sqlx::PgPool;
-use std::{env, net::SocketAddr};
-use tokio::sync::mpsc;
-use tracing_subscriber::EnvFilter;
+use anyhow::Result;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use url_shortener::{config, server};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
-        .init();
+async fn main() -> Result<()> {
+    if let Err(e) = dotenvy::dotenv() {
+        eprintln!("Failed to load .env: {} (using system environment)", e);
+    }
 
-    let database_url = env::var("DATABASE_URL")?;
-    let base_url = env::var("BASE_URL").unwrap_or_else(|_| "https://s.test.com/".to_string());
-    let listen = env::var("LISTEN").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+    let env_filter = EnvFilter::try_from_default_env().or_else(|_| EnvFilter::try_new("info"))?;
 
-    let db = PgPool::connect(&database_url).await?;
+    let cfg = config::load_from_env()?;
 
-    let (click_tx, click_rx) = mpsc::channel::<ClickEvent>(10_000);
-    tokio::spawn(run_click_worker(click_rx, db.clone()));
+    match cfg.log_format.as_str() {
+        "json" => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(false),
+                )
+                .init();
+        }
+        _ => {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(tracing_subscriber::fmt::layer())
+                .init();
+        }
+    }
 
-    let state = AppState {
-        db,
-        base_url,
-        click_tx,
-    };
+    tracing::info!(
+        listen = %cfg.listen_addr,
+        log_level = %cfg.log_level,
+        click_queue_capacity = %cfg.click_queue_capacity,
+        "Configuration loaded"
+    );
 
-    let addr: SocketAddr = listen.parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("Starting url-shortener");
 
-    tracing::info!("listening on http://{addr}");
-
-    let app = app_router(state);
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
-
-    Ok(())
+    server::run(cfg).await
 }

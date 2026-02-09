@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Links - URL Shortener{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+    <a href="/dashboard">Home</a> / Links
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<div class="filters">
+    <h2>Filters</h2>
+    <div class="filters-row">
+        <div class="filter-group">
+            <label for="domainFilter">Domain</label>
+            <select id="domainFilter">
+                <option value="">All Domains</option>
+            </select>
+        </div>
+
+        <div class="filter-group">
+            <label for="fromDate">From Date</label>
+            <input type="datetime-local" id="fromDate">
+        </div>
+
+        <div class="filter-group">
+            <label for="toDate">To Date</label>
+            <input type="datetime-local" id="toDate">
+        </div>
+
+        <div class="filter-group">
+            <label for="pageSizeSelect">Show Per Page</label>
+            <select id="pageSizeSelect">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="filter-actions">
+        <button id="applyFiltersBtn" class="btn">Apply Filters</button>
+        <button id="resetFiltersBtn" class="btn btn-secondary">Reset</button>
+    </div>
+</div>
+
+<!-- Links Table -->
+<div class="table-container">
+    <h2>Links List</h2>
+    <div id="linksTable">
+        <div class="loading">Loading...</div>
+    </div>
+</div>
+
+<!-- Pagination -->
+<div id="pagination"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Initialize Links on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        Links.init();
+    });
+</script>
+{% endblock %}

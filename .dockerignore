@@ -1,0 +1,14 @@
+target/
+.git/
+.gitignore
+*.md
+.env
+.env.*
+docker-compose.yml
+Dockerfile
+.dockerignore
+.idea/
+coverage/
+*.profraw
+tarpaulin-report.html
+cobertura.xml

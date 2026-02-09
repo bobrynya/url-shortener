@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Link Statistics - URL Shortener{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+    <a href="/dashboard">Home</a> / <a href="/dashboard/links">Links</a> / Statistics
+</div>
+{% endblock %}
+
+{% block header %}
+<div class="header">
+    <h1>📊 Link Statistics</h1>
+    <div class="header-actions">
+        <a href="/dashboard/links" class="btn btn-secondary">← Back to List</a>
+        <a href="/dashboard" class="btn btn-secondary">Dashboard</a>
+        <button onclick="Auth.logout()" class="btn btn-danger btn-sm">
+            🚪 Logout
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_styles %}
+<script src="/static/js/echarts.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<!-- Link Information -->
+<div class="card">
+    <h2>Link Information</h2>
+    <div class="info-row">
+        <div class="info-label">Short Link:</div>
+        <div class="info-value short-url">
+            <a id="shortUrl" href="#" target="_blank"></a>
+            <button id="copyBtn" class="btn btn-sm">📋</button>
+        </div>
+    </div>
+    <div class="info-row">
+        <div class="info-label">Original URL:</div>
+        <div class="info-value">
+            <a id="longUrl" href="#" target="_blank"></a>
+        </div>
+    </div>
+    <div class="info-row">
+        <div class="info-label">Domain:</div>
+        <div class="info-value">
+            <code id="domain">—</code>
+        </div>
+    </div>
+    <div class="info-row">
+        <div class="info-label">Total Clicks:</div>
+        <div class="info-value" id="totalClicks">0</div>
+    </div>
+    <div class="info-row">
+        <div class="info-label">Created:</div>
+        <div class="info-value" id="createdAt">—</div>
+    </div>
+</div>
+
+<!-- Time Period Filters -->
+<div class="card">
+    <h2>Statistics Period</h2>
+    <div class="quick-filters">
+        <button class="quick-filter-btn active" data-period="all" onclick="Stats.setQuickFilter('all')">
+            All Time
+        </button>
+        <button class="quick-filter-btn" data-period="today" onclick="Stats.setQuickFilter('today')">
+            Today
+        </button>
+        <button class="quick-filter-btn" data-period="week" onclick="Stats.setQuickFilter('week')">
+            This Week
+        </button>
+        <button class="quick-filter-btn" data-period="month" onclick="Stats.setQuickFilter('month')">
+            This Month
+        </button>
+        <button class="quick-filter-btn" data-period="custom" onclick="Stats.toggleCustomPeriod()">
+            Custom Period
+        </button>
+    </div>
+
+    <div id="customPeriodForm" style="display: none; margin-top: 16px;">
+        <div class="filters-row">
+            <div class="filter-group">
+                <label for="statsFromDate">From Date</label>
+                <input type="datetime-local" id="statsFromDate">
+            </div>
+            <div class="filter-group">
+                <label for="statsToDate">To Date</label>
+                <input type="datetime-local" id="statsToDate">
+            </div>
+            <div class="filter-group" style="align-self: end;">
+                <button class="btn" onclick="Stats.applyCustomPeriod()">Apply</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Clicks Over Time Chart -->
+<div class="card">
+    <h2>Clicks Over Time</h2>
+    <div id="clicksChart" style="min-height: 400px;"></div>
+</div>
+
+<!-- Clicks Table -->
+<div class="card">
+    <h2>Detailed Click History</h2>
+    <div id="clicksTable">
+        <div class="loading">Loading...</div>
+    </div>
+</div>
+
+<!-- Pagination -->
+<div id="pagination"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const code = '{{ code }}';
+        Stats.init(code);
+    });
+</script>
+{% endblock %}
