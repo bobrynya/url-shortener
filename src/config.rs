@@ -544,4 +544,100 @@ mod tests {
             env::remove_var("REDIS_HOST");
         }
     }
+
+    fn base_config() -> Config {
+        Config {
+            database_url: "postgres://localhost/test".to_string(),
+            redis_url: None,
+            listen_addr: "0.0.0.0:3000".to_string(),
+            log_level: "info".to_string(),
+            log_format: "text".to_string(),
+            click_queue_capacity: 10_000,
+            behind_proxy: false,
+            cache_ttl_seconds: 3600,
+            click_worker_concurrency: 4,
+            token_signing_secret: "test-secret".to_string(),
+            db_max_connections: 10,
+            db_connect_timeout: 30,
+            db_idle_timeout: 600,
+            db_max_lifetime: 1800,
+        }
+    }
+
+    #[test]
+    fn test_validate_click_queue_capacity_too_large() {
+        let mut c = base_config();
+        c.click_queue_capacity = 1_000_001;
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_invalid_redis_url_format() {
+        let mut c = base_config();
+        c.redis_url = Some("mysql://localhost/0".to_string());
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_valid_redis_url_formats() {
+        let mut c = base_config();
+        c.redis_url = Some("redis://localhost:6379/0".to_string());
+        assert!(c.validate().is_ok());
+
+        c.redis_url = Some("rediss://localhost:6379/0".to_string());
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_cache_ttl_zero() {
+        let mut c = base_config();
+        c.cache_ttl_seconds = 0;
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_click_worker_concurrency_bounds() {
+        let mut c = base_config();
+        c.click_worker_concurrency = 0;
+        assert!(c.validate().is_err());
+
+        c.click_worker_concurrency = 257;
+        assert!(c.validate().is_err());
+
+        c.click_worker_concurrency = 1;
+        assert!(c.validate().is_ok());
+
+        c.click_worker_concurrency = 256;
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_token_signing_secret() {
+        let mut c = base_config();
+        c.token_signing_secret = "".to_string();
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_db_max_connections_zero() {
+        let mut c = base_config();
+        c.db_max_connections = 0;
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_db_connect_timeout_zero() {
+        let mut c = base_config();
+        c.db_connect_timeout = 0;
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn test_is_cache_enabled() {
+        let mut c = base_config();
+        assert!(!c.is_cache_enabled());
+
+        c.redis_url = Some("redis://localhost:6379/0".to_string());
+        assert!(c.is_cache_enabled());
+    }
 }

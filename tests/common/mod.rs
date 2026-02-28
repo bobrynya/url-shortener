@@ -39,6 +39,42 @@ pub async fn create_test_link(pool: &PgPool, code: &str, url: &str, domain_id: i
     .unwrap();
 }
 
+pub async fn create_deleted_link(pool: &PgPool, code: &str, url: &str, domain_id: i64) {
+    sqlx::query!(
+        "INSERT INTO links (code, long_url, domain_id, deleted_at) VALUES ($1, $2, $3, NOW())",
+        code,
+        url,
+        domain_id
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+pub async fn create_expired_link(pool: &PgPool, code: &str, url: &str, domain_id: i64) {
+    sqlx::query!(
+        "INSERT INTO links (code, long_url, domain_id, expires_at) VALUES ($1, $2, $3, NOW() - INTERVAL '1 hour')",
+        code,
+        url,
+        domain_id
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+pub async fn create_permanent_link(pool: &PgPool, code: &str, url: &str, domain_id: i64) {
+    sqlx::query!(
+        "INSERT INTO links (code, long_url, domain_id, permanent) VALUES ($1, $2, $3, TRUE)",
+        code,
+        url,
+        domain_id
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 pub async fn create_test_click(pool: &PgPool, link_id: i64, ip: &str) {
     sqlx::query!(
         "INSERT INTO link_clicks (link_id, ip) VALUES ($1, $2)",

@@ -94,3 +94,80 @@ pub struct StatsQueryParams {
 
     pub domain: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn params(page: Option<u32>, page_size: Option<u32>) -> PaginationParams {
+        PaginationParams { page, page_size }
+    }
+
+    #[test]
+    fn test_defaults() {
+        let (offset, limit) = params(None, None).validate_and_get_offset_limit().unwrap();
+        assert_eq!(offset, 0);
+        assert_eq!(limit, 25);
+    }
+
+    #[test]
+    fn test_page_2_with_default_size() {
+        let (offset, limit) = params(Some(2), None).validate_and_get_offset_limit().unwrap();
+        assert_eq!(offset, 25);
+        assert_eq!(limit, 25);
+    }
+
+    #[test]
+    fn test_custom_page_and_size() {
+        let (offset, limit) = params(Some(3), Some(50)).validate_and_get_offset_limit().unwrap();
+        assert_eq!(offset, 100);
+        assert_eq!(limit, 50);
+    }
+
+    #[test]
+    fn test_page_zero_is_error() {
+        assert!(params(Some(0), None).validate_and_get_offset_limit().is_err());
+    }
+
+    #[test]
+    fn test_page_size_below_minimum_is_error() {
+        assert!(params(None, Some(9)).validate_and_get_offset_limit().is_err());
+        assert!(params(None, Some(0)).validate_and_get_offset_limit().is_err());
+    }
+
+    #[test]
+    fn test_page_size_at_minimum_is_ok() {
+        assert!(params(None, Some(10)).validate_and_get_offset_limit().is_ok());
+    }
+
+    #[test]
+    fn test_page_size_at_maximum_is_ok() {
+        assert!(params(None, Some(1000)).validate_and_get_offset_limit().is_ok());
+    }
+
+    #[test]
+    fn test_page_size_above_maximum_is_error() {
+        assert!(params(None, Some(1001)).validate_and_get_offset_limit().is_err());
+    }
+
+    #[test]
+    fn test_optional_rfc3339_deserializer() {
+        let json = r#"{"from": "2026-01-01T00:00:00Z", "to": null}"#;
+        let p: DateFilterParams = serde_json::from_str(json).unwrap();
+        assert!(p.from.is_some());
+        assert!(p.to.is_none());
+    }
+
+    #[test]
+    fn test_optional_rfc3339_both_absent() {
+        let p: DateFilterParams = serde_json::from_str("{}").unwrap();
+        assert!(p.from.is_none());
+        assert!(p.to.is_none());
+    }
+
+    #[test]
+    fn test_optional_rfc3339_invalid_format_is_error() {
+        let json = r#"{"from": "not-a-date"}"#;
+        assert!(serde_json::from_str::<DateFilterParams>(json).is_err());
+    }
+}

@@ -2,6 +2,7 @@ mod common;
 
 use axum::{Router, extract::ConnectInfo, routing::get};
 use axum_test::TestServer;
+use axum::http::StatusCode;
 use sqlx::PgPool;
 use std::net::SocketAddr;
 use tower::Layer;
@@ -158,4 +159,67 @@ async fn test_redirect_missing_host_header(pool: PgPool) {
     let response = server.get("/anycode").await;
 
     response.assert_status_bad_request();
+}
+
+fn make_redirect_server(pool: PgPool) -> TestServer {
+    use url_shortener::api::handlers::redirect_handler;
+    let (state, _rx) = common::create_test_state(pool);
+    let app = Router::new()
+        .route("/{code}", get(redirect_handler))
+        .layer(MockConnectInfoLayer)
+        .with_state(state);
+    TestServer::new(app).unwrap()
+}
+
+#[sqlx::test]
+async fn test_redirect_deleted_link_returns_410(pool: PgPool) {
+    let domain_id = common::get_default_domain(&pool).await;
+    common::create_deleted_link(&pool, "gone1", "https://example.com", domain_id).await;
+
+    let server = make_redirect_server(pool);
+    let response = server
+        .get("/gone1")
+        .add_header("Host", "s.example.com")
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::GONE);
+
+    let body = response.json::<serde_json::Value>();
+    assert_eq!(body["error"]["code"], "gone");
+}
+
+#[sqlx::test]
+async fn test_redirect_expired_link_returns_410(pool: PgPool) {
+    let domain_id = common::get_default_domain(&pool).await;
+    common::create_expired_link(&pool, "gone2", "https://example.com", domain_id).await;
+
+    let server = make_redirect_server(pool);
+    let response = server
+        .get("/gone2")
+        .add_header("Host", "s.example.com")
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::GONE);
+
+    let body = response.json::<serde_json::Value>();
+    assert_eq!(body["error"]["code"], "gone");
+}
+
+/// axum's `Redirect::permanent` issues 308 Permanent Redirect (method-preserving),
+/// not 301 Moved Permanently. Both are permanent; 308 is the modern standard.
+#[sqlx::test]
+async fn test_redirect_permanent_link_returns_308(pool: PgPool) {
+    let domain_id = common::get_default_domain(&pool).await;
+    common::create_permanent_link(&pool, "perm1", "https://example.com/dest", domain_id).await;
+
+    let server = make_redirect_server(pool);
+    let response = server
+        .get("/perm1")
+        .add_header("Host", "s.example.com")
+        .await;
+
+    assert_eq!(response.status_code(), StatusCode::PERMANENT_REDIRECT); // 308
+
+    let location = response.header("location");
+    assert_eq!(location, "https://example.com/dest");
 }
