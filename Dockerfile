@@ -1,66 +1,57 @@
 # ---------- chef stage ----------
-FROM rust:1.93-bookworm AS chef
+FROM rust:1.93-slim-bookworm AS chef
 WORKDIR /app
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef --version 0.1.68 --locked
 
 # ---------- planner stage ----------
 FROM chef AS planner
+# Only manifests needed — no source required for recipe generation
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---------- builder stage ----------
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
-# Build only dependencies (cached)
-RUN cargo chef cook --release --recipe-path recipe.json
+# Build only dependencies (cached layer)
+RUN cargo chef cook --release --locked --recipe-path recipe.json
 
-# Copy actual code and resources
+# Copy source, migrations, and sqlx query cache
+# Templates are in src/web/templates/ per askama.toml, included via COPY src ./src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
 COPY .sqlx ./.sqlx
 
-# Copy templates
-RUN mkdir -p templates
-COPY src/web/templates ./templates
-
-# Build with offline mode
+# Build with offline sqlx mode
 ENV SQLX_OFFLINE=true
-RUN cargo build --release --bin url-shortener
-
-# Strip binary to reduce size
-RUN strip target/release/url-shortener
+RUN cargo build --release --locked --bin url-shortener
+# Note: binary is already stripped via [profile.release] strip = true in Cargo.toml
 
 # ---------- runtime stage ----------
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
-# Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-# Install runtime dependencies
+# ca-certificates: TLS trust store for rustls
+# curl: used by Docker healthcheck
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/url-shortener /app/url-shortener
+# Copy binary and static assets in one layer with correct ownership
+COPY --from=builder --chown=appuser:appuser /app/target/release/url-shortener /app/url-shortener
+COPY --chown=appuser:appuser static /app/static
 
-# Copy runtime resources
-COPY static /app/static
-
-# Set ownership
-RUN chown -R appuser:appuser /app
-
-# Switch to non-root user
 USER appuser
 
 ENV LISTEN=0.0.0.0:8000
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 CMD ["/app/url-shortener"]

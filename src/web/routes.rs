@@ -1,7 +1,7 @@
 //! Web dashboard route configuration.
 
 use crate::state::AppState;
-use crate::web::handlers::{dashboard_handler, links_handler, login_handler, stats_handler};
+use crate::web::handlers::{dashboard_handler, domains_handler, links_handler, login_handler, stats_handler};
 use axum::{Router, routing::get};
 
 /// Protected dashboard routes requiring authentication.
@@ -13,11 +13,13 @@ use axum::{Router, routing::get};
 /// - `GET /` - Dashboard home with overview
 /// - `GET /links` - Link management page
 /// - `GET /stats/{code}` - Detailed statistics page for a specific link
+/// - `GET /domains` - Domain management page
 pub fn protected_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(dashboard_handler))
         .route("/links", get(links_handler))
         .route("/stats/{code}", get(stats_handler))
+        .route("/domains", get(domains_handler))
 }
 
 /// Public dashboard routes without authentication.

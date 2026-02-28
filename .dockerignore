@@ -1,4 +1,8 @@
 target/
+# Tailwind build artifacts (styles.css is committed; these are only for local regen)
+tailwindcss
+static/css/input.css
+tests/
 .git/
 .gitignore
 *.md
@@ -8,6 +12,8 @@ docker-compose.yml
 Dockerfile
 .dockerignore
 .idea/
+.claude/
+LICENSE
 coverage/
 *.profraw
 tarpaulin-report.html

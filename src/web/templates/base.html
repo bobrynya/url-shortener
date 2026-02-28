@@ -4,34 +4,40 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}URL Shortener{% endblock %}</title>
-
     <link rel="stylesheet" href="/static/css/styles.css">
     <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico">
-
     {% block extra_styles %}{% endblock %}
 </head>
-<body>
-<div class="container">
-    {% block breadcrumb %}{% endblock %}
+<body class="min-h-screen bg-gray-50 text-gray-900 antialiased">
 
-    {% block header %}
-    <div class="header">
-        <h1>URL Shortener</h1>
-        <div class="header-actions">
-            <a href="/dashboard" class="btn btn-secondary">Dashboard</a>
-            <a href="/dashboard/links" class="btn btn-secondary">All Links</a>
-            <button onclick="Auth.logout()" class="btn btn-danger btn-sm">
-                🚪 Logout
+{% block header %}
+<header class="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+        <a href="/dashboard" class="text-lg font-bold text-blue-600 hover:text-blue-700 transition-colors">
+            URL Shortener
+        </a>
+        <nav class="flex items-center gap-5 text-sm">
+            <a href="/dashboard" class="text-gray-600 hover:text-blue-600 transition-colors">Dashboard</a>
+            <a href="/dashboard/links" class="text-gray-600 hover:text-blue-600 transition-colors">Links</a>
+            <a href="/dashboard/domains" class="text-gray-600 hover:text-blue-600 transition-colors">Domains</a>
+            <button onclick="Auth.logout()"
+                    class="text-red-500 hover:text-red-700 transition-colors cursor-pointer bg-transparent border-none p-0 text-sm">
+                Logout
             </button>
-        </div>
+        </nav>
     </div>
-    {% endblock %}
+</header>
+{% endblock %}
 
+{% block wrapper %}
+<main class="max-w-5xl mx-auto px-4 py-6">
+    {% block breadcrumb %}{% endblock %}
     {% block content %}{% endblock %}
-</div>
+</main>
+{% endblock %}
 
 <script src="/static/js/shortener.js"></script>
-
+<script defer src="/static/js/alpine.min.js"></script>
 {% block extra_scripts %}{% endblock %}
 </body>
 </html>

@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}Domains - URL Shortener{% endblock %}
+
+{% block content %}
+<div x-data="domainsPage()" x-init="init()" x-cloak>
+
+    <!-- Breadcrumb -->
+    <nav class="text-sm text-gray-500 mb-4">
+        <a href="/dashboard" class="hover:text-blue-600 transition-colors">Home</a>
+        <span class="mx-1.5 text-gray-300">/</span>
+        <span>Domains</span>
+    </nav>
+
+    <!-- Global delete error -->
+    <div x-show="deleteError"
+         x-cloak
+         class="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-start gap-2">
+        <span class="shrink-0 mt-0.5">⚠</span>
+        <span x-text="deleteError"></span>
+        <button @click="deleteError = ''" class="ml-auto text-red-400 hover:text-red-600 shrink-0">×</button>
+    </div>
+
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <!-- Header -->
+        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Domains</h2>
+            <button @click="showAddForm = !showAddForm"
+                    class="text-sm bg-blue-600 text-white px-4 py-1.5 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition">
+                <span x-text="showAddForm ? '× Cancel' : '+ Add Domain'"></span>
+            </button>
+        </div>
+
+        <!-- Add form -->
+        <div x-show="showAddForm"
+             x-transition:enter="transition ease-out duration-150"
+             x-transition:enter-start="opacity-0 -translate-y-2"
+             x-transition:enter-end="opacity-100 translate-y-0"
+             class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+            <div class="flex flex-wrap items-end gap-3">
+                <div>
+                    <label class="block text-xs text-gray-600 mb-1">Domain name <span class="text-red-500">*</span></label>
+                    <input type="text"
+                           x-model="newDomain.domain"
+                           @keydown.enter.prevent="create()"
+                           placeholder="example.com"
+                           class="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition w-48">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-600 mb-1">Description</label>
+                    <input type="text"
+                           x-model="newDomain.description"
+                           @keydown.enter.prevent="create()"
+                           placeholder="Optional description"
+                           class="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition w-48">
+                </div>
+                <label class="flex items-center gap-2 text-xs text-gray-600 pb-1 cursor-pointer">
+                    <input type="checkbox"
+                           x-model="newDomain.isDefault"
+                           class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                    Set as default
+                </label>
+                <button @click="create()"
+                        class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition">
+                    Add
+                </button>
+            </div>
+            <p x-show="addError"
+               class="text-xs text-red-600 mt-2"
+               x-text="addError"></p>
+        </div>
+
+        <!-- Loading -->
+        <div x-show="loading" class="px-6 py-10 text-center text-sm text-gray-400">Loading…</div>
+        <div x-show="!loading && domains.length === 0"
+             x-cloak
+             class="px-6 py-10 text-center text-sm text-gray-400">
+            No domains configured yet
+        </div>
+
+        <!-- Table -->
+        <div x-show="!loading && domains.length > 0" x-cloak class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-500 border-b border-gray-100 bg-gray-50">
+                        <th class="px-6 py-3 font-medium">Domain</th>
+                        <th class="px-6 py-3 font-medium">Description</th>
+                        <th class="px-6 py-3 font-medium">Default</th>
+                        <th class="px-6 py-3 font-medium">Status</th>
+                        <th class="px-6 py-3 font-medium">Created</th>
+                        <th class="px-6 py-3 font-medium">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-50">
+                    <template x-for="d in domains" :key="d.id">
+
+                        <!-- View row -->
+                        <tr class="hover:bg-gray-50 transition-colors" x-show="editingId !== d.id">
+                            <td class="px-6 py-3 font-mono text-gray-900" x-text="d.domain"></td>
+                            <td class="px-6 py-3 text-gray-500 text-xs" x-text="d.description || '—'"></td>
+                            <td class="px-6 py-3">
+                                <span x-show="d.isDefault"
+                                      class="text-yellow-500 text-base"
+                                      title="Default domain">★</span>
+                            </td>
+                            <td class="px-6 py-3">
+                                <span class="text-xs font-medium px-2 py-0.5 rounded-full"
+                                      :class="d.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'"
+                                      x-text="d.isActive ? 'Active' : 'Inactive'">
+                                </span>
+                            </td>
+                            <td class="px-6 py-3 text-gray-400 text-xs" x-text="formatDate(d.createdAt)"></td>
+                            <td class="px-6 py-3">
+                                <div class="flex items-center gap-3 text-xs">
+                                    <button @click="startEdit(d)"
+                                            class="text-blue-600 hover:text-blue-800 transition">Edit</button>
+
+                                    <!-- Delete only if not default -->
+                                    <template x-if="!d.isDefault">
+                                        <template x-if="deleteConfirm !== d.id">
+                                            <button @click="confirmDelete(d.id)"
+                                                    class="text-red-400 hover:text-red-600 transition">Delete</button>
+                                        </template>
+                                    </template>
+                                    <template x-if="deleteConfirm === d.id">
+                                        <span class="flex items-center gap-1">
+                                            <span class="text-red-600 font-medium">Delete?</span>
+                                            <button @click="doDelete(d.id)"
+                                                    class="text-red-600 font-semibold hover:text-red-800">Yes</button>
+                                            <button @click="cancelDelete()"
+                                                    class="text-gray-400 hover:text-gray-600">No</button>
+                                        </span>
+                                    </template>
+                                </div>
+                            </td>
+                        </tr>
+
+                        <!-- Edit row -->
+                        <tr x-show="editingId === d.id"
+                            x-cloak
+                            class="bg-blue-50 border-l-2 border-blue-400">
+                            <td colspan="6" class="px-6 py-4">
+                                <div class="flex flex-wrap items-end gap-3 mb-3">
+                                    <div>
+                                        <label class="block text-xs text-gray-500 mb-1">Description</label>
+                                        <input type="text"
+                                               x-model="editForm.description"
+                                               placeholder="Optional"
+                                               class="px-2.5 py-1.5 border border-blue-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 transition w-48">
+                                    </div>
+                                    <label class="flex items-center gap-1.5 text-xs text-gray-600 pb-1 cursor-pointer">
+                                        <input type="checkbox"
+                                               x-model="editForm.isDefault"
+                                               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                        Set as default
+                                    </label>
+                                    <label class="flex items-center gap-1.5 text-xs text-gray-600 pb-1 cursor-pointer">
+                                        <input type="checkbox"
+                                               x-model="editForm.isActive"
+                                               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                        Active
+                                    </label>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button @click="saveEdit(d.id)"
+                                            class="px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition">
+                                        Save
+                                    </button>
+                                    <button @click="cancelEdit()"
+                                            class="px-3 py-1.5 border border-gray-300 text-xs rounded hover:bg-white transition">
+                                        Cancel
+                                    </button>
+                                    <span x-show="editError"
+                                          class="text-xs text-red-600 ml-1"
+                                          x-text="editError"></span>
+                                </div>
+                            </td>
+                        </tr>
+
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

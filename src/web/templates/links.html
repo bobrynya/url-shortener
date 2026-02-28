@@ -2,67 +2,206 @@
 
 {% block title %}Links - URL Shortener{% endblock %}
 
-{% block breadcrumb %}
-<div class="breadcrumb">
-    <a href="/dashboard">Home</a> / Links
-</div>
-{% endblock %}
-
 {% block content %}
-<!-- Filters -->
-<div class="filters">
-    <h2>Filters</h2>
-    <div class="filters-row">
-        <div class="filter-group">
-            <label for="domainFilter">Domain</label>
-            <select id="domainFilter">
-                <option value="">All Domains</option>
-            </select>
-        </div>
+<div x-data="linksPage()" x-init="init()" x-cloak>
 
-        <div class="filter-group">
-            <label for="fromDate">From Date</label>
-            <input type="datetime-local" id="fromDate">
-        </div>
+    <!-- Breadcrumb -->
+    <nav class="text-sm text-gray-500 mb-4">
+        <a href="/dashboard" class="hover:text-blue-600 transition-colors">Home</a>
+        <span class="mx-1.5 text-gray-300">/</span>
+        <span>Links</span>
+    </nav>
 
-        <div class="filter-group">
-            <label for="toDate">To Date</label>
-            <input type="datetime-local" id="toDate">
-        </div>
-
-        <div class="filter-group">
-            <label for="pageSizeSelect">Show Per Page</label>
-            <select id="pageSizeSelect">
-                <option value="10">10</option>
-                <option value="25" selected>25</option>
-                <option value="50">50</option>
-            </select>
+    <!-- Filters -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-4 mb-4">
+        <div class="flex flex-wrap items-end gap-3">
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Domain</label>
+                <select x-model="domain"
+                        class="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+                    <option value="">All Domains</option>
+                    <template x-for="d in domains" :key="d.id">
+                        <option :value="d.domain" x-text="d.domain"></option>
+                    </template>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">From</label>
+                <input type="datetime-local" x-model="fromDate"
+                       class="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">To</label>
+                <input type="datetime-local" x-model="toDate"
+                       class="px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Per page</label>
+                <select x-model.number="pageSize"
+                        class="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                </select>
+            </div>
+            <button @click="applyFilters()"
+                    class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition">
+                Apply
+            </button>
+            <button @click="resetFilters()"
+                    class="px-4 py-1.5 border border-gray-200 text-sm rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300 transition">
+                Reset
+            </button>
         </div>
     </div>
 
-    <div class="filter-actions">
-        <button id="applyFiltersBtn" class="btn">Apply Filters</button>
-        <button id="resetFiltersBtn" class="btn btn-secondary">Reset</button>
+    <!-- Table -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
+            <p class="text-xs text-gray-500">
+                <span x-text="totalItems"></span> links found
+            </p>
+        </div>
+
+        <div x-show="loading" class="px-4 py-10 text-center text-sm text-gray-400">Loading…</div>
+        <div x-show="!loading && links.length === 0"
+             x-cloak
+             class="px-4 py-10 text-center text-sm text-gray-400">
+            No links found
+        </div>
+
+        <div x-show="!loading && links.length > 0" x-cloak class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-500 border-b border-gray-100">
+                        <th class="px-4 py-3 font-medium">Code</th>
+                        <th class="px-4 py-3 font-medium">Original URL</th>
+                        <th class="px-4 py-3 font-medium">Domain</th>
+                        <th class="px-4 py-3 font-medium">Clicks</th>
+                        <th class="px-4 py-3 font-medium">Created</th>
+                        <th class="px-4 py-3 font-medium">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-50">
+                    <template x-for="link in links" :key="link.code">
+                        <!-- Data row -->
+                        <tr class="hover:bg-gray-50 transition-colors" x-show="editingCode !== link.code">
+                            <td class="px-4 py-3">
+                                <a :href="'https://' + link.domain + '/' + link.code"
+                                   target="_blank"
+                                   class="font-mono text-blue-600 hover:underline"
+                                   x-text="link.code"></a>
+                            </td>
+                            <td class="px-4 py-3 max-w-xs">
+                                <a :href="link.longUrl"
+                                   target="_blank"
+                                   class="text-gray-600 hover:text-blue-600 truncate block transition"
+                                   :title="link.longUrl"
+                                   x-text="link.longUrl"></a>
+                            </td>
+                            <td class="px-4 py-3 text-gray-500 font-mono text-xs" x-text="link.domain"></td>
+                            <td class="px-4 py-3 text-gray-600" x-text="link.total || 0"></td>
+                            <td class="px-4 py-3 text-gray-400 text-xs" x-text="formatDate(link.createdAt)"></td>
+                            <td class="px-4 py-3">
+                                <div class="flex items-center gap-3 text-xs">
+                                    <a :href="'/dashboard/stats/' + link.code"
+                                       class="text-blue-600 hover:underline transition">Stats</a>
+                                    <button @click="startEdit(link)"
+                                            class="text-gray-500 hover:text-gray-800 transition">Edit</button>
+                                    <!-- Delete / confirm -->
+                                    <template x-if="deleteConfirm !== link.code">
+                                        <button @click="confirmDelete(link.code)"
+                                                class="text-red-400 hover:text-red-600 transition">Delete</button>
+                                    </template>
+                                    <template x-if="deleteConfirm === link.code">
+                                        <span class="flex items-center gap-1">
+                                            <span class="text-red-600 font-medium">Delete?</span>
+                                            <button @click="doDelete(link.code)"
+                                                    class="text-red-600 font-semibold hover:text-red-800">Yes</button>
+                                            <button @click="cancelDelete()"
+                                                    class="text-gray-400 hover:text-gray-600">No</button>
+                                        </span>
+                                    </template>
+                                </div>
+                            </td>
+                        </tr>
+
+                        <!-- Edit row -->
+                        <tr x-show="editingCode === link.code"
+                            x-cloak
+                            class="bg-blue-50 border-l-2 border-blue-400">
+                            <td colspan="6" class="px-4 py-4">
+                                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                                    <div class="sm:col-span-2">
+                                        <label class="block text-xs text-gray-500 mb-1">Destination URL</label>
+                                        <input type="url"
+                                               x-model="editForm.url"
+                                               class="w-full px-2.5 py-1.5 border border-blue-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 transition">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500 mb-1">Expires at <span class="text-gray-400">(leave empty to keep)</span></label>
+                                        <input type="datetime-local"
+                                               x-model="editForm.expiresAt"
+                                               class="w-full px-2.5 py-1.5 border border-blue-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 transition">
+                                    </div>
+                                </div>
+                                <div class="flex items-center flex-wrap gap-4 mb-3">
+                                    <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                                        <input type="checkbox" x-model="editForm.permanent"
+                                               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                        Permanent redirect (301)
+                                    </label>
+                                    <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                                        <input type="checkbox" x-model="editForm.restore"
+                                               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                        Restore if deleted
+                                    </label>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button @click="saveEdit(link.code)"
+                                            class="px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition">
+                                        Save
+                                    </button>
+                                    <button @click="cancelEdit()"
+                                            class="px-3 py-1.5 border border-gray-300 text-xs rounded hover:bg-white transition">
+                                        Cancel
+                                    </button>
+                                    <span x-show="editError"
+                                          class="text-xs text-red-600 ml-1"
+                                          x-text="editError"></span>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div x-show="totalPages > 1"
+             x-cloak
+             class="flex items-center justify-center gap-1 px-4 py-3 border-t border-gray-100">
+            <button @click="goToPage(page - 1)"
+                    :disabled="page === 1"
+                    class="px-3 py-1 text-sm border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">
+                ←
+            </button>
+            <template x-for="p in pages" :key="p">
+                <button @click="goToPage(p)"
+                        :class="p === page
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'border-gray-200 hover:bg-gray-50'"
+                        class="px-3 py-1 text-sm border rounded transition">
+                    <span x-text="p"></span>
+                </button>
+            </template>
+            <button @click="goToPage(page + 1)"
+                    :disabled="page === totalPages"
+                    class="px-3 py-1 text-sm border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition">
+                →
+            </button>
+        </div>
     </div>
+
 </div>
-
-<!-- Links Table -->
-<div class="table-container">
-    <h2>Links List</h2>
-    <div id="linksTable">
-        <div class="loading">Loading...</div>
-    </div>
-</div>
-
-<!-- Pagination -->
-<div id="pagination"></div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-    // Initialize Links on page load
-    document.addEventListener('DOMContentLoaded', () => {
-        Links.init();
-    });
-</script>
 {% endblock %}

@@ -30,7 +30,7 @@ Production-ready URL shortener built with Rust using Clean Architecture principl
 
 ### Administration
 - **Web Dashboard**: `GET /dashboard`, `/dashboard/links`, `/dashboard/stats/{code}`
-- **Service Health**: `GET /api/health` — database, cache, and click queue checks
+- **Service Health**: `GET /health` — database, cache, and click queue checks
 - **Admin CLI**: token management and domain setup via `cargo run --bin admin`
 
 ### Security & Operations
@@ -373,7 +373,7 @@ Rejected (400) if the domain is the current default or has existing links.
 
 ### Service Health
 
-**`GET /api/health`**
+**`GET /health`**
 
 Response `200 OK` (healthy) or `503 Service Unavailable` (degraded):
 

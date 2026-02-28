@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+/* Scan Askama templates and JS for class names */
+@source "../../src/web/templates";
+@source "../js/shortener.js";
+
+/* Prevent Alpine.js FOUC */
+[x-cloak] { display: none !important; }

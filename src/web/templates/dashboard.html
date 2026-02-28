@@ -2,50 +2,169 @@
 
 {% block title %}Dashboard - URL Shortener{% endblock %}
 
-{% block header %}
-<div class="header">
-    <h1>URL Shortener</h1>
-    <a href="/dashboard/links" class="btn btn-secondary">All Links →</a>
-</div>
-{% endblock %}
-
 {% block content %}
-<!-- Create Links Form -->
-<div class="form-section">
-    <h2>Create Short Links</h2>
-    <form id="createLinksForm">
-        <div id="linkFieldsContainer">
-            <!-- Fields will be dynamically added via JS -->
-        </div>
+<div x-data="dashboardPage()" x-init="init()" x-cloak>
 
-        <div class="form-actions">
-            <button type="button" id="addLinkFieldBtn" class="btn btn-secondary">
-                + Add Another Link
-            </button>
-            <button type="submit" class="btn">
-                Create All Links
-            </button>
-        </div>
-    </form>
-</div>
+    <!-- Create Links Form -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
+        <h2 class="text-base font-semibold text-gray-900 mb-4">Create Short Links</h2>
+        <form @submit.prevent="submit()">
+            <template x-for="(field, idx) in fields" :key="field.id">
+                <div class="border border-gray-200 rounded-lg p-4 mb-3">
+                    <!-- URL row -->
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-400 w-5 text-right shrink-0" x-text="(idx + 1) + '.'"></span>
+                        <input type="url"
+                               x-model="field.url"
+                               placeholder="https://example.com/very/long/url"
+                               required
+                               class="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition">
+                        <button type="button"
+                                @click="field.showAdvanced = !field.showAdvanced"
+                                class="text-xs text-blue-600 hover:text-blue-800 shrink-0 transition">
+                            <span x-text="field.showAdvanced ? '− Options' : '+ Options'"></span>
+                        </button>
+                        <button type="button"
+                                @click="removeField(field.id)"
+                                x-show="fields.length > 1"
+                                class="text-gray-300 hover:text-red-500 text-xl leading-none shrink-0 transition">×</button>
+                    </div>
 
-<!-- Creation Results -->
-<div id="createResult"></div>
+                    <!-- Advanced options -->
+                    <div x-show="field.showAdvanced"
+                         x-transition:enter="transition ease-out duration-150"
+                         x-transition:enter-start="opacity-0 -translate-y-1"
+                         x-transition:enter-end="opacity-100 translate-y-0"
+                         class="mt-3 grid grid-cols-2 gap-3 pl-7">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Custom code <span class="text-gray-400">(4–50 chars, a-z 0-9 -)</span></label>
+                            <input type="text"
+                                   x-model="field.customCode"
+                                   placeholder="my-link"
+                                   pattern="[a-z0-9\-]+"
+                                   minlength="4"
+                                   maxlength="50"
+                                   class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 transition">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Expires at</label>
+                            <input type="datetime-local"
+                                   x-model="field.expiresAt"
+                                   class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 transition">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Domain</label>
+                            <select x-model="field.domainId"
+                                    class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white transition">
+                                <option value="">Default</option>
+                                <template x-for="d in domains" :key="d.id">
+                                    <option :value="d.id" x-text="d.domain"></option>
+                                </template>
+                            </select>
+                        </div>
+                        <div class="flex items-center gap-2 mt-4">
+                            <input type="checkbox"
+                                   :id="'perm-' + field.id"
+                                   x-model="field.permanent"
+                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                            <label :for="'perm-' + field.id" class="text-xs text-gray-600 cursor-pointer">
+                                Permanent redirect (301)
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </template>
 
-<!-- Recently Created Links -->
-<div class="table-container">
-    <h2>Recently Created Links</h2>
-    <div id="recentLinks">
-        <div class="loading">Loading...</div>
+            <div class="flex items-center gap-3 mt-2">
+                <button type="button"
+                        @click="addField()"
+                        class="text-sm text-blue-600 hover:text-blue-800 font-medium transition">
+                    + Add Another Link
+                </button>
+                <div class="flex-1"></div>
+                <button type="submit"
+                        :disabled="loading"
+                        class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition disabled:opacity-50">
+                    <span x-text="loading ? 'Creating…' : 'Create All Links'"></span>
+                </button>
+            </div>
+        </form>
     </div>
-</div>
-{% endblock %}
 
-{% block extra_scripts %}
-<script>
-    // Initialize Dashboard on page load
-    document.addEventListener('DOMContentLoaded', () => {
-        Dashboard.init();
-    });
-</script>
+    <!-- Results -->
+    <div x-show="results.length > 0" x-cloak class="mb-6 space-y-2">
+        <template x-for="r in results" :key="r.longUrl">
+            <div class="flex items-start gap-3 p-3 rounded-lg border"
+                 :class="r.shortUrl ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'">
+                <span class="font-bold mt-0.5"
+                      :class="r.shortUrl ? 'text-green-600' : 'text-red-500'"
+                      x-text="r.shortUrl ? '✓' : '✗'"></span>
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs text-gray-500 truncate" x-text="r.longUrl"></p>
+                    <p x-show="r.shortUrl"
+                       class="text-sm font-mono text-blue-600 mt-0.5"
+                       x-text="r.shortUrl"></p>
+                    <p x-show="r.error"
+                       class="text-sm text-red-600 mt-0.5"
+                       x-text="r.error?.message || r.error"></p>
+                </div>
+                <button x-show="r.shortUrl"
+                        @click="navigator.clipboard.writeText(r.shortUrl)"
+                        class="text-xs text-gray-400 hover:text-gray-600 shrink-0 transition">
+                    copy
+                </button>
+            </div>
+        </template>
+    </div>
+
+    <!-- Recent Links -->
+    <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Recently Created Links</h2>
+            <a href="/dashboard/links" class="text-sm text-blue-600 hover:underline transition">All Links →</a>
+        </div>
+
+        <div x-show="recentLoading" class="px-6 py-8 text-center text-sm text-gray-400">Loading…</div>
+        <div x-show="!recentLoading && recentLinks.length === 0"
+             x-cloak
+             class="px-6 py-8 text-center text-sm text-gray-400">
+            No links yet. Create your first one above.
+        </div>
+
+        <div x-show="!recentLoading && recentLinks.length > 0" x-cloak class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-xs text-gray-500 bg-gray-50 border-b border-gray-100">
+                        <th class="px-6 py-3 font-medium">Code</th>
+                        <th class="px-6 py-3 font-medium">Original URL</th>
+                        <th class="px-6 py-3 font-medium">Domain</th>
+                        <th class="px-6 py-3 font-medium">Clicks</th>
+                        <th class="px-6 py-3 font-medium">Created</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-50">
+                    <template x-for="link in recentLinks" :key="link.code">
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="px-6 py-3">
+                                <a :href="'https://' + link.domain + '/' + link.code"
+                                   target="_blank"
+                                   class="font-mono text-blue-600 hover:underline"
+                                   x-text="link.code"></a>
+                            </td>
+                            <td class="px-6 py-3 max-w-xs">
+                                <span class="text-gray-600 truncate block"
+                                      :title="link.longUrl"
+                                      x-text="link.longUrl"></span>
+                            </td>
+                            <td class="px-6 py-3 text-gray-500 font-mono text-xs" x-text="link.domain"></td>
+                            <td class="px-6 py-3 text-gray-600" x-text="link.total || 0"></td>
+                            <td class="px-6 py-3 text-gray-400 text-xs" x-text="formatDate(link.createdAt)"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
 {% endblock %}

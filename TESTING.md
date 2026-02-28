@@ -58,7 +58,7 @@ tests/
 ├── handler_shorten.rs        # POST /api/shorten
 ├── handler_redirect.rs       # GET /{code}
 ├── handler_stats.rs          # GET /api/stats, GET /api/stats/{code}
-├── handler_health.rs         # GET /api/health
+├── handler_health.rs         # GET /health
 ├── handler_domains.rs        # GET/POST/PATCH/DELETE /api/domains
 ├── repository_link.rs        # PgLinkRepository
 ├── repository_domain.rs      # PgDomainRepository

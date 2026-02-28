@@ -100,8 +100,5 @@ tower = { version = "0.5", features = ["util"] }
 # Mock framework
 mockall = "0.14"
 
-# Test database
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate"] }
-
 # Test
 serial_test = "3"

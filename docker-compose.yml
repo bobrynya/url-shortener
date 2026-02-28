@@ -26,18 +26,19 @@ services:
       - app_network
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: url_shortener_redis
+    user: redis
     ports:
       - "${REDIS_PORT:-6379}:6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save 60 1000
-    volumes:
-      - redis_data:/data
+    # Cache-only: persistence disabled (no RDB saves, no AOF)
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 5s
     deploy:
       resources:
         limits:
@@ -50,19 +51,19 @@ services:
     build: .
     container_name: url_shortener_app
     environment:
-      # Database configuration (override host for Docker networking)
+      # Database
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
 
-      # Redis configuration (override host for Docker networking)
+      # Redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_DB: ${REDIS_DB:-0}
 
-      # Application configuration
+      # Application
       LISTEN: 0.0.0.0:8000
       RUST_LOG: ${RUST_LOG:-info}
       LOG_FORMAT: ${LOG_FORMAT:-text}
@@ -95,7 +96,6 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
 
 networks:
   app_network:
