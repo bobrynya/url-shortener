@@ -16,24 +16,19 @@ pub struct RedisCache {
 }
 
 impl RedisCache {
-    /// Connects to Redis and validates the connection with a PING.
+    /// Connects to Redis, validates the connection with a PING, and configures the default TTL.
     ///
     /// # Arguments
     ///
-    /// - `redis_url` - Redis connection string (e.g., "redis://localhost:6379")
-    ///
-    /// # Configuration
-    ///
-    /// - Default TTL: 3600 seconds (1 hour)
-    /// - Key prefix: "url:"
+    /// - `redis_url` - Redis connection string (e.g., `"redis://localhost:6379"`)
+    /// - `default_ttl_seconds` - TTL applied to cached entries when [`CacheService::set_url`]
+    ///   is called with `ttl_seconds = None`; controlled via `CACHE_TTL_SECONDS` env var
     ///
     /// # Errors
     ///
-    /// Returns [`CacheError::ConnectionError`] if:
-    /// - Invalid Redis URL format
-    /// - Cannot establish connection
-    /// - PING command fails
-    pub async fn connect(redis_url: &str) -> CacheResult<Self> {
+    /// Returns [`CacheError::ConnectionError`] if the URL is invalid, the connection cannot
+    /// be established, or the PING health check fails.
+    pub async fn connect(redis_url: &str, default_ttl_seconds: u64) -> CacheResult<Self> {
         info!("Connecting to Redis at {}", redis_url);
 
         let client = Client::open(redis_url).map_err(|e| {
@@ -54,7 +49,7 @@ impl RedisCache {
 
         Ok(Self {
             client: manager,
-            default_ttl: 3600,
+            default_ttl: default_ttl_seconds as usize,
             key_prefix: "url:".to_string(),
         })
     }

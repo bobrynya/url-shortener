@@ -1,18 +1,19 @@
-//! Link creation and retrieval service.
+//! Link creation, retrieval, deletion, and update service.
 
 use std::sync::Arc;
 
-use crate::domain::entities::{Link, NewLink};
+use crate::domain::entities::{Link, LinkPatch, NewLink};
 use crate::domain::repositories::{DomainRepository, LinkRepository};
 use crate::error::AppError;
 use crate::utils::code_generator::{generate_code, validate_custom_code};
 use crate::utils::url_normalizer::normalize_url;
+use chrono::{DateTime, Utc};
 use serde_json::json;
 
-/// Service for creating and retrieving shortened links.
+/// Service for creating and managing shortened links.
 ///
-/// Handles URL normalization, code generation/validation, and deduplication
-/// to ensure consistent and collision-free short URLs.
+/// Handles URL normalization, code generation/validation, deduplication,
+/// soft-deletion, and partial updates.
 pub struct LinkService<L: LinkRepository, D: DomainRepository> {
     link_repository: Arc<L>,
     domain_repository: Arc<D>,
@@ -28,51 +29,43 @@ impl<L: LinkRepository, D: DomainRepository> LinkService<L, D> {
     }
 
     /// Creates a short link using the default domain.
-    ///
-    /// # Arguments
-    ///
-    /// - `long_url` - The original URL to shorten
-    /// - `custom_code` - Optional custom short code (validated if provided)
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AppError::Validation`] if:
-    /// - URL is invalid
-    /// - Custom code is invalid
-    /// - Domain doesn't exist
-    ///
-    /// Returns [`AppError::Conflict`] if custom code already exists.
     pub async fn create_short_link(
         &self,
         long_url: String,
         custom_code: Option<String>,
+        expires_at: Option<DateTime<Utc>>,
+        permanent: bool,
     ) -> Result<Link, AppError> {
         let default_domain = self.domain_repository.get_default().await?;
-        self.create_short_link_for_domain(long_url, default_domain.id, custom_code)
-            .await
+        self.create_short_link_for_domain(
+            long_url,
+            default_domain.id,
+            custom_code,
+            expires_at,
+            permanent,
+        )
+        .await
     }
 
     /// Creates a short link for a specific domain.
     ///
     /// # Deduplication
     ///
-    /// If a link for the same normalized URL and domain already exists, returns
-    /// the existing link instead of creating a duplicate.
+    /// If a non-deleted link for the same normalized URL and domain already exists,
+    /// returns the existing link instead of creating a duplicate.
     ///
     /// # Code Generation
     ///
     /// - If `custom_code` is provided, validates and uses it (or returns conflict error)
     /// - Otherwise, generates a cryptographically secure random 12-character code
     /// - Retries up to 10 times on collision before failing
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::create_short_link`] for error cases.
     pub async fn create_short_link_for_domain(
         &self,
         long_url: String,
         domain_id: i64,
         custom_code: Option<String>,
+        expires_at: Option<DateTime<Utc>>,
+        permanent: bool,
     ) -> Result<Link, AppError> {
         let normalized_url = normalize_url(&long_url).map_err(|e| {
             AppError::bad_request("Invalid URL format", json!({ "reason": e.to_string() }))
@@ -93,7 +86,7 @@ impl<L: LinkRepository, D: DomainRepository> LinkService<L, D> {
                 .link_repository
                 .find_by_code(&custom, domain_id)
                 .await?
-                .is_some()
+                .is_some_and(|l| !l.is_deleted())
             {
                 return Err(AppError::conflict(
                     "Custom code already exists for this domain",
@@ -110,6 +103,8 @@ impl<L: LinkRepository, D: DomainRepository> LinkService<L, D> {
             code,
             long_url: normalized_url,
             domain_id,
+            expires_at,
+            permanent,
         };
 
         self.link_repository.create(new_link).await
@@ -117,10 +112,11 @@ impl<L: LinkRepository, D: DomainRepository> LinkService<L, D> {
 
     /// Retrieves a link by its short code and domain.
     ///
+    /// Returns the link regardless of deleted/expired state — callers check those fields.
+    ///
     /// # Errors
     ///
     /// Returns [`AppError::NotFound`] if no link matches the code and domain.
-    /// Returns [`AppError::Internal`] on database errors.
     pub async fn get_link_by_code(&self, code: &str, domain_id: i64) -> Result<Link, AppError> {
         self.link_repository
             .find_by_code(code, domain_id)
@@ -140,9 +136,25 @@ impl<L: LinkRepository, D: DomainRepository> LinkService<L, D> {
         format!("https://{}/{}", domain.trim_end_matches('/'), code)
     }
 
-    /// Generates a unique short code for a domain with collision retry.
+    /// Soft-deletes a link (sets `deleted_at`). Returns `false` if not found.
+    pub async fn soft_delete_link(&self, code: &str, domain_id: i64) -> Result<bool, AppError> {
+        self.link_repository.soft_delete(code, domain_id).await
+    }
+
+    /// Partially updates a link.
     ///
-    /// Attempts up to 10 times before failing.
+    /// Only patch fields that are `Some` are modified. Set `patch.restore = true`
+    /// to restore a previously soft-deleted link.
+    pub async fn update_link(
+        &self,
+        code: &str,
+        domain_id: i64,
+        patch: LinkPatch,
+    ) -> Result<Link, AppError> {
+        self.link_repository.update(code, domain_id, patch).await
+    }
+
+    /// Generates a unique short code for a domain with collision retry.
     async fn generate_unique_code(&self, domain_id: i64) -> Result<String, AppError> {
         const MAX_ATTEMPTS: usize = 10;
 
@@ -182,6 +194,7 @@ mod tests {
             None,
             Utc::now(),
             Utc::now(),
+            None,
         )
     }
 
@@ -192,6 +205,9 @@ mod tests {
             url.to_string(),
             Some("s.example.com".to_string()),
             Utc::now(),
+            None,
+            false,
+            None,
         )
     }
 
@@ -225,7 +241,7 @@ mod tests {
         let service = LinkService::new(Arc::new(mock_link_repo), Arc::new(mock_domain_repo));
 
         let result = service
-            .create_short_link("https://example.com".to_string(), None)
+            .create_short_link("https://example.com".to_string(), None, None, false)
             .await;
 
         assert!(result.is_ok());
@@ -264,7 +280,12 @@ mod tests {
         let service = LinkService::new(Arc::new(mock_link_repo), Arc::new(mock_domain_repo));
 
         let result = service
-            .create_short_link("https://EXAMPLE.COM:443/path".to_string(), None)
+            .create_short_link(
+                "https://EXAMPLE.COM:443/path".to_string(),
+                None,
+                None,
+                false,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -292,7 +313,7 @@ mod tests {
         let service = LinkService::new(Arc::new(mock_link_repo), Arc::new(mock_domain_repo));
 
         let result = service
-            .create_short_link("https://example.com".to_string(), None)
+            .create_short_link("https://example.com".to_string(), None, None, false)
             .await;
 
         assert!(result.is_ok());
@@ -309,7 +330,7 @@ mod tests {
         let service = LinkService::new(Arc::new(mock_link_repo), Arc::new(mock_domain_repo));
 
         let result = service
-            .create_short_link_for_domain("not-a-url".to_string(), 1, None)
+            .create_short_link_for_domain("not-a-url".to_string(), 1, None, None, false)
             .await;
 
         assert!(result.is_err());
@@ -351,6 +372,8 @@ mod tests {
             .create_short_link(
                 "https://example.com".to_string(),
                 Some("mycode12".to_string()),
+                None,
+                false,
             )
             .await;
 
@@ -388,6 +411,8 @@ mod tests {
             .create_short_link(
                 "https://example.com".to_string(),
                 Some("taken123".to_string()),
+                None,
+                false,
             )
             .await;
 

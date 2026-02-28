@@ -1,33 +1,47 @@
 //! Authentication service for API token validation.
 
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use std::sync::Arc;
 
 use crate::domain::repositories::TokenRepository;
 use crate::error::AppError;
 use serde_json::json;
 
+type HmacSha256 = Hmac<Sha256>;
+
 /// Service for authenticating API requests via Bearer tokens.
 ///
-/// Tokens are hashed using SHA-256 before storage and comparison to prevent
-/// leakage of raw credentials.
+/// Tokens are hashed with HMAC-SHA256 (keyed by `signing_secret`) before storage
+/// and comparison. An attacker with read-only access to the database cannot verify
+/// or forge tokens without the server-side secret.
 pub struct AuthService<R: TokenRepository> {
     repository: Arc<R>,
+    signing_secret: String,
 }
 
 impl<R: TokenRepository> AuthService<R> {
     /// Creates a new authentication service.
-    pub fn new(repository: Arc<R>) -> Self {
-        Self { repository }
+    ///
+    /// # Arguments
+    ///
+    /// - `repository` - token repository for DB operations
+    /// - `signing_secret` - HMAC key; must match the value used when tokens were created
+    pub fn new(repository: Arc<R>, signing_secret: String) -> Self {
+        Self {
+            repository,
+            signing_secret,
+        }
     }
 
-    /// Hashes a raw token using SHA-256.
+    /// Hashes a raw token with HMAC-SHA256 using the server signing secret.
     ///
-    /// Returns a 64-character hex-encoded hash.
+    /// Returns a 64-character lowercase hex-encoded MAC.
     fn hash_token(&self, token: &str) -> String {
-        let mut h = Sha256::new();
-        h.update(token.as_bytes());
-        hex::encode(h.finalize())
+        let mut mac = HmacSha256::new_from_slice(self.signing_secret.as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(token.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
     }
 
     /// Authenticates a raw token against stored credentials.
@@ -65,16 +79,23 @@ mod tests {
     use super::*;
     use crate::domain::repositories::MockTokenRepository;
 
+    fn test_secret() -> String {
+        "test-signing-secret".to_string()
+    }
+
+    fn compute_expected_hash(token: &str) -> String {
+        let mut mac = HmacSha256::new_from_slice(test_secret().as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(token.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
     #[tokio::test]
     async fn test_authenticate_success() {
         let mut mock_repo = MockTokenRepository::new();
 
         let token = "valid-token";
-        let expected_hash = {
-            let mut h = Sha256::new();
-            h.update(token.as_bytes());
-            hex::encode(h.finalize())
-        };
+        let expected_hash = compute_expected_hash(token);
 
         mock_repo
             .expect_validate_token()
@@ -87,7 +108,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let service = AuthService::new(Arc::new(mock_repo));
+        let service = AuthService::new(Arc::new(mock_repo), test_secret());
 
         let result = service.authenticate(token).await;
 
@@ -103,7 +124,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(false));
 
-        let service = AuthService::new(Arc::new(mock_repo));
+        let service = AuthService::new(Arc::new(mock_repo), test_secret());
 
         let result = service.authenticate("invalid-token").await;
 
@@ -114,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn test_hash_token_consistency() {
         let mock_repo = MockTokenRepository::new();
-        let service = AuthService::new(Arc::new(mock_repo));
+        let service = AuthService::new(Arc::new(mock_repo), test_secret());
 
         let hash1 = service.hash_token("test-token");
         let hash2 = service.hash_token("test-token");
@@ -126,11 +147,23 @@ mod tests {
     #[tokio::test]
     async fn test_hash_token_different_inputs() {
         let mock_repo = MockTokenRepository::new();
-        let service = AuthService::new(Arc::new(mock_repo));
+        let service = AuthService::new(Arc::new(mock_repo), test_secret());
 
         let hash1 = service.hash_token("token1");
         let hash2 = service.hash_token("token2");
 
         assert_ne!(hash1, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_hash_token_secret_matters() {
+        let mock_repo1 = MockTokenRepository::new();
+        let mock_repo2 = MockTokenRepository::new();
+
+        let svc1 = AuthService::new(Arc::new(mock_repo1), "secret-a".to_string());
+        let svc2 = AuthService::new(Arc::new(mock_repo2), "secret-b".to_string());
+
+        // Same token, different secrets → different hashes
+        assert_ne!(svc1.hash_token("token"), svc2.hash_token("token"));
     }
 }

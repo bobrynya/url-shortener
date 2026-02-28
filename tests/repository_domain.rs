@@ -88,7 +88,8 @@ async fn test_update_domain(pool: PgPool) {
 
     let update = UpdateDomain {
         is_active: Some(false),
-        description: Some("New description".to_string()),
+        description: Some(Some("New description".to_string())),
+        ..Default::default()
     };
     let result = repo.update(created.id, update).await;
 

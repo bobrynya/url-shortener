@@ -24,12 +24,6 @@ impl<R: DomainRepository> DomainService<R> {
 
     /// Creates a new domain.
     ///
-    /// # Arguments
-    ///
-    /// - `domain` - Domain name (e.g., "s.example.com")
-    /// - `is_default` - Whether to set as system default
-    /// - `description` - Optional human-readable description
-    ///
     /// # Validation
     ///
     /// - Must contain at least one dot
@@ -40,7 +34,6 @@ impl<R: DomainRepository> DomainService<R> {
     ///
     /// Returns [`AppError::Validation`] if validation fails.
     /// Returns [`AppError::Conflict`] if domain already exists.
-    /// Returns [`AppError::Internal`] on database errors.
     pub async fn create_domain(
         &self,
         domain: String,
@@ -71,11 +64,7 @@ impl<R: DomainRepository> DomainService<R> {
         Ok(created)
     }
 
-    /// Lists all domains, optionally filtered by active status.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AppError::Internal`] on database errors.
+    /// Lists all non-deleted domains, optionally filtered by active status.
     pub async fn list_domains(&self, only_active: bool) -> Result<Vec<Domain>, AppError> {
         self.repository.list(only_active).await
     }
@@ -84,52 +73,69 @@ impl<R: DomainRepository> DomainService<R> {
     ///
     /// # Errors
     ///
+    /// Returns [`AppError::Gone`] if the domain has been soft-deleted.
     /// Returns [`AppError::NotFound`] if the domain does not exist.
-    /// Returns [`AppError::Internal`] on database errors.
     pub async fn get_domain(&self, domain: &str) -> Result<Domain, AppError> {
-        self.repository
-            .find_by_name(domain)
-            .await?
-            .ok_or_else(|| AppError::not_found("Domain not found", json!({"domain": domain})))
+        match self.repository.find_by_name(domain).await? {
+            Some(d) if d.is_deleted() => Err(AppError::gone(
+                "Domain has been deleted",
+                json!({"domain": domain}),
+            )),
+            Some(d) => Ok(d),
+            None => Err(AppError::not_found(
+                "Domain not found",
+                json!({"domain": domain}),
+            )),
+        }
     }
 
     /// Retrieves the system default domain.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AppError::NotFound`] if no default domain is configured.
-    /// Returns [`AppError::Internal`] on database errors.
     pub async fn get_default_domain(&self) -> Result<Domain, AppError> {
         self.repository.get_default().await
     }
 
-    /// Sets a domain as the system default.
-    ///
-    /// Only one domain can be default at a time.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AppError::NotFound`] if the domain does not exist.
-    /// Returns [`AppError::Internal`] on database errors.
+    /// Sets a domain as the system default (atomic transaction).
     pub async fn set_default(&self, domain_id: i64) -> Result<(), AppError> {
         self.repository.set_default(domain_id).await
     }
 
-    /// Updates an existing domain.
+    /// Partially updates a domain.
+    ///
+    /// # `is_default` handling
+    ///
+    /// Setting `is_default = true` atomically transfers the default flag via
+    /// `set_default()`. Setting `is_default = false` is rejected — to change the
+    /// default, set another domain as default instead.
     ///
     /// # Errors
     ///
+    /// Returns [`AppError::Validation`] if `is_default = false` is requested.
+    /// Returns [`AppError::Validation`] if domain name is invalid.
     /// Returns [`AppError::NotFound`] if the domain does not exist.
-    /// Returns [`AppError::Internal`] on database errors.
     pub async fn update_domain(
         &self,
         domain_id: i64,
         update: UpdateDomain,
     ) -> Result<Domain, AppError> {
+        if update.is_default == Some(false) {
+            return Err(AppError::bad_request(
+                "Cannot unset default domain directly",
+                json!({"hint": "Set another domain as default instead"}),
+            ));
+        }
+
+        if update.is_default == Some(true) {
+            self.repository.set_default(domain_id).await?;
+        }
+
+        if let Some(ref name) = update.domain {
+            self.validate_domain_name(name)?;
+        }
+
         self.repository.update(domain_id, update).await
     }
 
-    /// Deletes a domain with safety checks.
+    /// Soft-deletes a domain after safety checks.
     ///
     /// # Safety Checks
     ///
@@ -140,7 +146,6 @@ impl<R: DomainRepository> DomainService<R> {
     ///
     /// Returns [`AppError::NotFound`] if the domain does not exist.
     /// Returns [`AppError::Validation`] if safety checks fail.
-    /// Returns [`AppError::Internal`] on database errors.
     pub async fn delete_domain(&self, domain_id: i64) -> Result<(), AppError> {
         let domain = self
             .repository
@@ -167,10 +172,6 @@ impl<R: DomainRepository> DomainService<R> {
     }
 
     /// Validates domain name format.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AppError::ValidationError`] if validation fails.
     fn validate_domain_name(&self, domain: &str) -> Result<(), AppError> {
         if domain.is_empty() || domain.len() > 255 {
             return Err(AppError::bad_request(
@@ -215,6 +216,7 @@ mod tests {
             None,
             Utc::now(),
             Utc::now(),
+            None,
         )
     }
 
@@ -339,6 +341,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_domain_deleted_returns_gone() {
+        let mut mock_repo = MockDomainRepository::new();
+
+        let deleted = Domain::new(
+            1,
+            "deleted.com".to_string(),
+            false,
+            true,
+            None,
+            Utc::now(),
+            Utc::now(),
+            Some(Utc::now()),
+        );
+        mock_repo
+            .expect_find_by_name()
+            .times(1)
+            .returning(move |_| Ok(Some(deleted.clone())));
+
+        let service = DomainService::new(Arc::new(mock_repo));
+
+        let result = service.get_domain("deleted.com").await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AppError::Gone { .. }));
+    }
+
+    #[tokio::test]
     async fn test_delete_domain_with_links() {
         let mut mock_repo = MockDomainRepository::new();
 
@@ -397,5 +426,75 @@ mod tests {
         assert!(result.is_ok());
         let list = result.unwrap();
         assert_eq!(list.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_update_domain_reject_unset_default() {
+        let mock_repo = MockDomainRepository::new();
+        let service = DomainService::new(Arc::new(mock_repo));
+
+        let result = service
+            .update_domain(
+                1,
+                UpdateDomain {
+                    is_default: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AppError::Validation { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_update_domain_set_default() {
+        let mut mock_repo = MockDomainRepository::new();
+
+        mock_repo
+            .expect_set_default()
+            .withf(|id| *id == 2)
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let updated = create_test_domain(2, "new-default.com", true);
+        mock_repo
+            .expect_update()
+            .times(1)
+            .returning(move |_, _| Ok(updated.clone()));
+
+        let service = DomainService::new(Arc::new(mock_repo));
+
+        let result = service
+            .update_domain(
+                2,
+                UpdateDomain {
+                    is_default: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_default);
+    }
+
+    #[tokio::test]
+    async fn test_update_domain_rename_invalid_name() {
+        let mock_repo = MockDomainRepository::new();
+        let service = DomainService::new(Arc::new(mock_repo));
+
+        let result = service
+            .update_domain(
+                1,
+                UpdateDomain {
+                    domain: Some("no-dot-here".to_string()),
+                    ..Default::default()
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), AppError::Validation { .. }));
     }
 }

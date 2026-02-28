@@ -41,9 +41,12 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
 use dialoguer::{Confirm, Input};
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use sqlx::PgPool;
 use std::sync::Arc;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// CLI tool for managing url-shortener.
 #[derive(Parser)]
@@ -120,13 +123,15 @@ async fn main() -> Result<()> {
 
     // Connect to database
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+    let signing_secret =
+        std::env::var("TOKEN_SIGNING_SECRET").context("TOKEN_SIGNING_SECRET must be set")?;
 
     let pool = PgPool::connect(&database_url)
         .await
         .context("Failed to connect to database")?;
 
     match cli.command {
-        Commands::Token { action } => handle_token_action(action, &pool).await?,
+        Commands::Token { action } => handle_token_action(action, &pool, &signing_secret).await?,
         Commands::Stats => handle_stats(&pool).await?,
         Commands::Db { action } => handle_db_action(action, &pool).await?,
     }
@@ -135,12 +140,12 @@ async fn main() -> Result<()> {
 }
 
 /// Dispatches token management commands.
-async fn handle_token_action(action: TokenAction, pool: &PgPool) -> Result<()> {
+async fn handle_token_action(action: TokenAction, pool: &PgPool, secret: &str) -> Result<()> {
     let repo = Arc::new(PgTokenRepository::new(Arc::new(pool.clone())));
 
     match action {
         TokenAction::Create { name, token, yes } => {
-            create_token(repo, name, token, yes).await?;
+            create_token(repo, name, token, yes, secret).await?;
         }
         TokenAction::List => {
             list_tokens(repo).await?;
@@ -175,6 +180,7 @@ async fn create_token(
     name: Option<String>,
     token: Option<String>,
     skip_confirm: bool,
+    secret: &str,
 ) -> Result<()> {
     println!("{}", "🔑 Create API Token".bright_blue().bold());
     println!();
@@ -229,7 +235,7 @@ async fn create_token(
     }
 
     // Hash token
-    let token_hash = hash_token(&token_value);
+    let token_hash = hash_token(&token_value, secret);
 
     // Save to database
     repo.create_token(&token_name, &token_hash)
@@ -473,11 +479,12 @@ fn generate_token() -> String {
         .collect()
 }
 
-/// Hashes a token using SHA-256.
+/// Hashes a token with HMAC-SHA256 keyed by `secret`.
 ///
-/// Returns lowercase hex-encoded hash for database storage.
-fn hash_token(token: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    format!("{:x}", hasher.finalize())
+/// Returns a 64-character lowercase hex-encoded MAC for database storage.
+fn hash_token(token: &str, secret: &str) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(token.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }

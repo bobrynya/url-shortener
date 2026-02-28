@@ -4,7 +4,6 @@
 //! asynchronous click processing. Cloned for each request via Axum's
 //! state extraction.
 
-use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -32,26 +31,29 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Creates a new application state with initialized services.
+    /// Creates application state from pre-built repositories.
+    ///
+    /// Repositories are constructed once in `server.rs` and shared between the click
+    /// worker and the application state to avoid redundant allocations.
     ///
     /// # Arguments
     ///
-    /// - `pool` - Database connection pool
-    /// - `click_sender` - Channel sender for async click processing
-    /// - `cache` - Cache implementation (Redis or NullCache)
+    /// - `link_repo` / `stats_repo` / `token_repo` / `domain_repo` - pre-built repositories
+    /// - `click_sender` - channel sender for asynchronous click event processing
+    /// - `cache` - cache implementation ([`RedisCache`](crate::infrastructure::cache::RedisCache) or [`NullCache`](crate::infrastructure::cache::NullCache))
+    /// - `token_signing_secret` - HMAC key for token hashing; must match `TOKEN_SIGNING_SECRET`
     pub fn new(
-        pool: Arc<PgPool>,
+        link_repo: Arc<PgLinkRepository>,
+        stats_repo: Arc<PgStatsRepository>,
+        token_repo: Arc<PgTokenRepository>,
+        domain_repo: Arc<PgDomainRepository>,
         click_sender: mpsc::Sender<ClickEvent>,
         cache: Arc<dyn CacheService>,
+        token_signing_secret: String,
     ) -> Self {
-        let link_repo = Arc::new(PgLinkRepository::new(pool.clone()));
-        let stats_repo = Arc::new(PgStatsRepository::new(pool.clone()));
-        let token_repo = Arc::new(PgTokenRepository::new(pool.clone()));
-        let domain_repo = Arc::new(PgDomainRepository::new(pool.clone()));
-
         let link_service = Arc::new(LinkService::new(link_repo, domain_repo.clone()));
         let stats_service = Arc::new(StatsService::new(stats_repo));
-        let auth_service = Arc::new(AuthService::new(token_repo));
+        let auth_service = Arc::new(AuthService::new(token_repo, token_signing_secret));
         let domain_service = Arc::new(DomainService::new(domain_repo));
 
         Self {

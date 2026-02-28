@@ -1,0 +1,4 @@
+ALTER TABLE links
+    ADD COLUMN expires_at TIMESTAMPTZ,
+    ADD COLUMN permanent  BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN deleted_at TIMESTAMPTZ;

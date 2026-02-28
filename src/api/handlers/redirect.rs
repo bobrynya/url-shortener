@@ -5,6 +5,7 @@ use axum::{
     http::{HeaderMap, header},
     response::{IntoResponse, Redirect},
 };
+use serde_json::json;
 use std::net::SocketAddr;
 use tracing::{debug, error};
 
@@ -12,6 +13,11 @@ use crate::domain::click_event::ClickEvent;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::utils::extract_domain::extract_domain_from_headers;
+
+/// Cache value prefix for permanent (301) links.
+const PERMANENT_PREFIX: &str = "1:";
+/// Cache value prefix for temporary (307) links.
+const TEMPORARY_PREFIX: &str = "0:";
 
 /// Redirects a short code to its original URL.
 ///
@@ -24,24 +30,22 @@ use crate::utils::extract_domain::extract_domain_from_headers;
 /// 1. Extract domain from Host header
 /// 2. Check cache for URL (cache key: `domain:code`)
 /// 3. On cache miss, query database
-/// 4. Asynchronously update cache
-/// 5. Send click event to background worker
-/// 6. Return 307 Temporary Redirect
+/// 4. Check if link is deleted or expired → 410 Gone
+/// 5. Asynchronously update cache with redirect-type prefix
+/// 6. Send click event to background worker
+/// 7. Return 301 Permanent or 307 Temporary redirect based on link's `permanent` flag
 ///
-/// # Cache Strategy
+/// # Cache Encoding
 ///
-/// - **Cache hit**: Immediate redirect
-/// - **Cache miss**: Query DB, spawn async cache write
-/// - **Cache error**: Log and fall back to DB
-///
-/// # Click Tracking
-///
-/// Click events are sent to a bounded channel for async processing.
-/// If the queue is full, the click is dropped (fire-and-forget).
+/// Cached values are prefixed to preserve the redirect type:
+/// - `"1:{url}"` → 301 Permanent Redirect
+/// - `"0:{url}"` → 307 Temporary Redirect
+/// - No prefix (legacy) → 307 Temporary Redirect
 ///
 /// # Errors
 ///
 /// Returns 404 Not Found if the short code doesn't exist.
+/// Returns 410 Gone if the link has been deleted or has expired.
 /// Returns 400 Bad Request if the Host header is missing or invalid.
 pub async fn redirect_handler(
     Path(code): Path<String>,
@@ -53,10 +57,10 @@ pub async fn redirect_handler(
 
     let cache_key = format!("{}:{}", domain, code);
 
-    let long_url = match state.cache.get_url(&cache_key).await {
-        Ok(Some(cached_url)) => {
+    let (long_url, permanent) = match state.cache.get_url(&cache_key).await {
+        Ok(Some(cached_value)) => {
             debug!("Cache HIT for {}", cache_key);
-            cached_url
+            parse_cached_value(&cached_value)
         }
         Ok(None) => {
             debug!("Cache MISS for {}", cache_key);
@@ -68,36 +72,70 @@ pub async fn redirect_handler(
                 .get_link_by_code(&code, domain_entity.id)
                 .await?;
 
-            // Asynchronously update cache (fire-and-forget)
+            // Deleted takes precedence over expired in the error message.
+            if link.is_deleted() {
+                return Err(AppError::gone(
+                    "This link has been deleted",
+                    json!({ "code": code }),
+                ));
+            }
+            if link.is_expired() {
+                return Err(AppError::gone(
+                    "This link has expired",
+                    json!({ "code": code }),
+                ));
+            }
+
+            let url = link.long_url.clone();
+            let permanent = link.permanent;
+
+            // Cache with redirect-type prefix. Use expiry-aware TTL if applicable.
             let cache_clone = state.cache.clone();
             let cache_key_clone = cache_key.clone();
-            let url_clone = link.long_url.clone();
+            let ttl = link.expires_at.map(|exp| {
+                let secs = (exp - chrono::Utc::now()).num_seconds();
+                secs.max(1) as usize
+            });
+            let cached_value = encode_cached_value(&url, permanent);
             tokio::spawn(async move {
                 if let Err(e) = cache_clone
-                    .set_url(&cache_key_clone, &url_clone, None)
+                    .set_url(&cache_key_clone, &cached_value, ttl)
                     .await
                 {
                     error!("Failed to cache URL: {}", e);
                 }
             });
 
-            link.long_url
+            (url, permanent)
         }
         Err(e) => {
             error!("Cache error: {}", e);
 
-            // Fall back to database on cache error
+            // Fall back to database on cache error.
             let domain_entity = state.domain_service.get_domain(&domain).await?;
             let link = state
                 .link_service
                 .get_link_by_code(&code, domain_entity.id)
                 .await?;
 
-            link.long_url
+            if link.is_deleted() {
+                return Err(AppError::gone(
+                    "This link has been deleted",
+                    json!({ "code": code }),
+                ));
+            }
+            if link.is_expired() {
+                return Err(AppError::gone(
+                    "This link has expired",
+                    json!({ "code": code }),
+                ));
+            }
+
+            (link.long_url, link.permanent)
         }
     };
 
-    // Send click event for async processing
+    // Send click event for async processing.
     let click_event = ClickEvent::new(
         domain,
         code,
@@ -110,5 +148,32 @@ pub async fn redirect_handler(
 
     let _ = state.click_sender.try_send(click_event);
 
-    Ok(Redirect::temporary(&long_url))
+    if permanent {
+        Ok(Redirect::permanent(&long_url))
+    } else {
+        Ok(Redirect::temporary(&long_url))
+    }
+}
+
+/// Encodes a URL with a redirect-type prefix for caching.
+fn encode_cached_value(url: &str, permanent: bool) -> String {
+    if permanent {
+        format!("{}{}", PERMANENT_PREFIX, url)
+    } else {
+        format!("{}{}", TEMPORARY_PREFIX, url)
+    }
+}
+
+/// Parses a cached value, extracting the URL and redirect type.
+///
+/// Handles both prefixed (new) and legacy (no prefix) entries.
+fn parse_cached_value(value: &str) -> (String, bool) {
+    if let Some(url) = value.strip_prefix(PERMANENT_PREFIX) {
+        (url.to_string(), true)
+    } else if let Some(url) = value.strip_prefix(TEMPORARY_PREFIX) {
+        (url.to_string(), false)
+    } else {
+        // Legacy cached entries without prefix → treat as temporary.
+        (value.to_string(), false)
+    }
 }

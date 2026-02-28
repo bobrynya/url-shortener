@@ -65,6 +65,7 @@ chrono = { version = "0.4", default-features = false, features = ["serde", "cloc
 # Security
 axum-auth = "0.8"
 sha2 = "0.10"
+hmac = "0.12"
 hex = "0.4"
 base64 = "0.22"
 rand = { version = "0.9", features = ["std", "std_rng"] }

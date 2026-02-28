@@ -245,7 +245,7 @@ async fn test_shorten_url_normalization(pool: PgPool) {
 }
 
 #[sqlx::test]
-async fn test_shorten_partial_failure_custom_code_too_short(pool: PgPool) {
+async fn test_shorten_partial_failure_reserved_custom_code(pool: PgPool) {
     let (state, _rx) = common::create_test_state(pool);
     let app = Router::new()
         .route("/api/shorten", post(shorten_handler))
@@ -259,7 +259,7 @@ async fn test_shorten_partial_failure_custom_code_too_short(pool: PgPool) {
                 { "url": "https://valid.com" },
                 {
                     "url": "https://another.com",
-                    "custom_code": "short"
+                    "custom_code": "admin"
                 }
             ]
         }))

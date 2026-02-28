@@ -1,6 +1,7 @@
 //! DTOs for link shortening endpoint.
 
 use crate::error::ErrorInfo;
+use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -29,9 +30,15 @@ pub struct UrlItem {
     pub domain: Option<String>,
 
     /// Optional custom short code (validated for length and characters).
-    #[validate(length(min = 3, max = 20))]
+    #[validate(length(min = 4, max = 50))]
     #[validate(regex(path = "*CUSTOM_CODE_REGEX"))]
     pub custom_code: Option<String>,
+
+    /// Optional expiry timestamp. After this time, the link returns 410 Gone.
+    pub expires_at: Option<DateTime<Utc>>,
+
+    /// When true, uses 301 Permanent Redirect instead of 307 Temporary.
+    pub permanent: Option<bool>,
 }
 
 /// Response containing batch processing results.

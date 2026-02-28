@@ -79,6 +79,9 @@ impl StatsRepository for PgStatsRepository {
             link_row.long_url,
             link_row.domain,
             link_row.created_at,
+            None,
+            false,
+            None,
         );
 
         let total = self

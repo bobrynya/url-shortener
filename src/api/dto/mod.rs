@@ -10,3 +10,4 @@ pub mod pagination;
 pub mod shorten;
 pub mod stats;
 pub mod stats_list;
+pub mod update_link;

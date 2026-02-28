@@ -12,6 +12,7 @@ use serde_json::json;
 /// PostgreSQL repository for domain management.
 ///
 /// Supports atomic default domain switching via database transactions.
+/// Uses soft delete — `deleted_at IS NOT NULL` means deleted.
 pub struct PgDomainRepository {
     pool: Arc<PgPool>,
 }
@@ -30,7 +31,7 @@ impl DomainRepository for PgDomainRepository {
             r#"
             INSERT INTO domains (domain, is_default, description)
             VALUES ($1, $2, $3)
-            RETURNING id, domain, is_default, is_active, description, created_at, updated_at
+            RETURNING id, domain, is_default, is_active, description, created_at, updated_at, deleted_at
             "#,
             new_domain.domain,
             new_domain.is_default,
@@ -47,13 +48,15 @@ impl DomainRepository for PgDomainRepository {
             row.description,
             row.created_at,
             row.updated_at,
+            row.deleted_at,
         ))
     }
 
     async fn find_by_id(&self, id: i64) -> Result<Option<Domain>, AppError> {
+        // Does NOT filter deleted_at — service decides what to do with deleted domains.
         let row = sqlx::query!(
             r#"
-            SELECT id, domain, is_default, is_active, description, created_at, updated_at
+            SELECT id, domain, is_default, is_active, description, created_at, updated_at, deleted_at
             FROM domains
             WHERE id = $1
             "#,
@@ -71,14 +74,16 @@ impl DomainRepository for PgDomainRepository {
                 r.description,
                 r.created_at,
                 r.updated_at,
+                r.deleted_at,
             )
         }))
     }
 
     async fn find_by_name(&self, domain: &str) -> Result<Option<Domain>, AppError> {
+        // Does NOT filter deleted_at — service checks is_deleted() to return 410 Gone.
         let row = sqlx::query!(
             r#"
-            SELECT id, domain, is_default, is_active, description, created_at, updated_at
+            SELECT id, domain, is_default, is_active, description, created_at, updated_at, deleted_at
             FROM domains
             WHERE domain = $1
             "#,
@@ -96,6 +101,7 @@ impl DomainRepository for PgDomainRepository {
                 r.description,
                 r.created_at,
                 r.updated_at,
+                r.deleted_at,
             )
         }))
     }
@@ -103,9 +109,9 @@ impl DomainRepository for PgDomainRepository {
     async fn get_default(&self) -> Result<Domain, AppError> {
         let row = sqlx::query!(
             r#"
-            SELECT id, domain, is_default, is_active, description, created_at, updated_at
+            SELECT id, domain, is_default, is_active, description, created_at, updated_at, deleted_at
             FROM domains
-            WHERE is_default = TRUE
+            WHERE is_default = TRUE AND deleted_at IS NULL
             LIMIT 1
             "#
         )
@@ -121,6 +127,7 @@ impl DomainRepository for PgDomainRepository {
                 r.description,
                 r.created_at,
                 r.updated_at,
+                r.deleted_at,
             )
         })
         .ok_or_else(|| {
@@ -132,13 +139,15 @@ impl DomainRepository for PgDomainRepository {
     }
 
     async fn list(&self, only_active: bool) -> Result<Vec<Domain>, AppError> {
+        // Never shows soft-deleted domains.
         let rows = sqlx::query!(
             r#"
-        SELECT id, domain, is_default, is_active, description, created_at, updated_at
-        FROM domains
-        WHERE ($1::boolean IS NULL OR is_active = $1)
-        ORDER BY is_default DESC, domain
-        "#,
+            SELECT id, domain, is_default, is_active, description, created_at, updated_at, deleted_at
+            FROM domains
+            WHERE deleted_at IS NULL
+              AND ($1::boolean IS NULL OR is_active = $1)
+            ORDER BY is_default DESC, domain
+            "#,
             if only_active { Some(true) } else { None }
         )
         .fetch_all(self.pool.as_ref())
@@ -155,25 +164,31 @@ impl DomainRepository for PgDomainRepository {
                     r.description,
                     r.created_at,
                     r.updated_at,
+                    r.deleted_at,
                 )
             })
             .collect())
     }
 
     async fn update(&self, id: i64, update: UpdateDomain) -> Result<Domain, AppError> {
+        let update_description = update.description.is_some();
+        let new_description = update.description.and_then(|v| v);
+
         let row = sqlx::query!(
             r#"
-            UPDATE domains
-            SET
-                is_active = COALESCE($2, is_active),
-                description = COALESCE($3, description),
-                updated_at = NOW()
+            UPDATE domains SET
+                domain      = COALESCE($2::TEXT, domain),
+                is_active   = COALESCE($3::BOOLEAN, is_active),
+                description = CASE WHEN $4 THEN $5::TEXT ELSE description END,
+                updated_at  = NOW()
             WHERE id = $1
-            RETURNING id, domain, is_default, is_active, description, created_at, updated_at
+            RETURNING id, domain, is_default, is_active, description, created_at, updated_at, deleted_at
             "#,
             id,
+            update.domain,
             update.is_active,
-            update.description
+            update_description,
+            new_description,
         )
         .fetch_one(self.pool.as_ref())
         .await?;
@@ -186,16 +201,26 @@ impl DomainRepository for PgDomainRepository {
             row.description,
             row.created_at,
             row.updated_at,
+            row.deleted_at,
         ))
     }
 
     async fn delete(&self, id: i64) -> Result<(), AppError> {
-        let result = sqlx::query!("DELETE FROM domains WHERE id = $1", id)
-            .execute(self.pool.as_ref())
-            .await?;
+        let result = sqlx::query!(
+            r#"
+            UPDATE domains SET deleted_at = NOW()
+            WHERE id = $1 AND deleted_at IS NULL
+            "#,
+            id
+        )
+        .execute(self.pool.as_ref())
+        .await?;
 
         if result.rows_affected() == 0 {
-            return Err(AppError::not_found("Domain not found", json!({"id": id})));
+            return Err(AppError::not_found(
+                "Domain not found or already deleted",
+                json!({"id": id}),
+            ));
         }
 
         Ok(())

@@ -3,6 +3,7 @@
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tokio_retry::RetryIf;
 use tokio_retry::strategy::ExponentialBackoff;
 
@@ -11,43 +12,26 @@ use crate::domain::entities::NewClick;
 use crate::domain::repositories::{DomainRepository, LinkRepository, StatsRepository};
 use crate::error::AppError;
 
-/// Determines if an error should trigger a retry.
+/// Returns `true` for transient errors that are worth retrying (e.g. DB connection issues).
 ///
-/// Only internal errors (database connection issues, timeouts) are considered transient.
-/// Errors like "link not found" are permanent and not retried.
+/// Permanent errors such as "link not found" return `false` and are not retried.
 fn is_transient_error(e: &AppError) -> bool {
     matches!(e, AppError::Internal { .. })
 }
 
-/// Runs the background click processing worker.
+/// Persists a single click event, resolving domain → link → click record.
 ///
-/// Consumes click events from a channel and persists them to the database
-/// with exponential backoff retry logic for transient errors.
-///
-/// # Retry Strategy
-///
-/// - Attempts: 6 (100ms, 200ms, 400ms, 800ms, 1.6s, 3.2s)
-/// - Only retries transient errors (database connection issues)
-/// - Permanent errors (not found) are logged and dropped
+/// Retries up to 6 times with exponential backoff (100 ms → 3.2 s) on transient errors.
+/// Permanent errors (domain/link not found) are logged and discarded immediately.
 ///
 /// # Metrics
 ///
-/// Emits counters for observability:
-/// - `click_worker_received_total` - Events received from channel
-/// - `click_worker_processed_total` - Successfully persisted events
-/// - `click_worker_retried_total` - Retry attempts
-/// - `click_worker_failed_total` - Failed after all retries
-/// - `click_worker_dropped_total` - Events dropped due to errors
-///
-/// # Graceful Shutdown
-///
-/// The worker stops when the sending side of the channel is dropped.
-///
-/// # Examples
-///
-/// See integration tests and `src/server.rs` for worker initialization.
-pub async fn run_click_worker<S, D, L>(
-    mut rx: mpsc::Receiver<ClickEvent>,
+/// - `click_worker_processed_total` - incremented on success
+/// - `click_worker_retried_total`   - incremented on each retry attempt
+/// - `click_worker_failed_total`    - incremented after exhausting all retries
+/// - `click_worker_dropped_total`   - incremented when the event is discarded
+async fn process_click<S, D, L>(
+    event: ClickEvent,
     stats_repository: Arc<S>,
     domain_repository: Arc<D>,
     link_repository: Arc<L>,
@@ -56,95 +40,150 @@ pub async fn run_click_worker<S, D, L>(
     D: DomainRepository,
     L: LinkRepository,
 {
-    tracing::info!("Click worker started");
+    let strategy = ExponentialBackoff::from_millis(100).take(6);
+
+    let stats_repo = stats_repository.clone();
+    let domain_repo = domain_repository.clone();
+    let link_repo = link_repository.clone();
+    let ev = event.clone();
+
+    let op = || {
+        let stats_repo = stats_repo.clone();
+        let domain_repo = domain_repo.clone();
+        let link_repo = link_repo.clone();
+        let event = ev.clone();
+
+        async move {
+            let domain_entity =
+                domain_repo
+                    .find_by_name(&event.domain)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::not_found(
+                            format!("Domain not found: {}", event.domain),
+                            json!({ "domain": event.domain.clone() }),
+                        )
+                    })?;
+
+            let link = link_repo
+                .find_by_code(&event.code, domain_entity.id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::not_found(
+                        format!("Link not found: {}", event.code),
+                        json!({ "code": event.code.clone(), "domain_id": domain_entity.id }),
+                    )
+                })?;
+
+            let new_click = NewClick {
+                link_id: link.id,
+                user_agent: event.user_agent,
+                referer: event.referer,
+                ip: event.ip,
+            };
+
+            stats_repo.record_click(new_click).await.map(|_| ())
+        }
+    };
+
+    let on_error = |e: &AppError| {
+        let transient = is_transient_error(e);
+        if transient {
+            metrics::counter!("click_worker_retried_total").increment(1);
+            tracing::warn!(
+                domain = &event.domain,
+                code = &event.code,
+                error = ?e,
+                "Click worker: transient error, retrying"
+            );
+        }
+        transient
+    };
+
+    match RetryIf::spawn(strategy, op, on_error).await {
+        Ok(()) => {
+            metrics::counter!("click_worker_processed_total").increment(1);
+            tracing::debug!(
+                domain = &event.domain,
+                code = &event.code,
+                "Click successfully recorded"
+            );
+        }
+        Err(e) => {
+            metrics::counter!("click_worker_failed_total").increment(1);
+            metrics::counter!("click_worker_dropped_total").increment(1);
+            tracing::error!(
+                error = ?e,
+                domain = &event.domain,
+                code = &event.code,
+                "Click worker: failed to persist click event after retries"
+            );
+        }
+    }
+}
+
+/// Runs the background click processing worker with bounded concurrency.
+///
+/// Reads [`ClickEvent`]s from `rx` and processes up to `concurrency` events in parallel.
+/// Each event is handled by [`process_click`], which retries transient database errors
+/// with exponential backoff.
+///
+/// # Concurrency
+///
+/// At most `concurrency` events are in-flight simultaneously. When all slots are busy,
+/// the worker waits for one to finish before accepting the next event. The mpsc channel
+/// buffer (configured via `CLICK_QUEUE_CAPACITY`) absorbs bursts beyond this limit.
+///
+/// # Graceful Shutdown
+///
+/// The worker exits when the sending side of the channel is dropped (i.e. after
+/// `axum::serve` completes and [`crate::state::AppState`] is deallocated).
+/// Before returning, all in-flight tasks are drained to avoid losing events.
+///
+/// # Metrics
+///
+/// - `click_worker_received_total` - events received from channel
+/// - `click_worker_processed_total` - events successfully persisted
+/// - `click_worker_retried_total` - individual retry attempts
+/// - `click_worker_failed_total` - events that exhausted all retries
+/// - `click_worker_dropped_total` - events discarded due to permanent errors
+pub async fn run_click_worker<S, D, L>(
+    mut rx: mpsc::Receiver<ClickEvent>,
+    stats_repository: Arc<S>,
+    domain_repository: Arc<D>,
+    link_repository: Arc<L>,
+    concurrency: usize,
+) where
+    S: StatsRepository + 'static,
+    D: DomainRepository + 'static,
+    L: LinkRepository + 'static,
+{
+    tracing::info!(concurrency, "Click worker started");
+
+    let mut join_set: JoinSet<()> = JoinSet::new();
 
     while let Some(ev) = rx.recv().await {
         metrics::counter!("click_worker_received_total").increment(1);
 
-        let strategy = ExponentialBackoff::from_millis(100).take(6);
+        // Clean up already-finished tasks to keep join_set size accurate.
+        while join_set.try_join_next().is_some() {}
+
+        // If at capacity, wait for one slot to free up before spawning more.
+        if join_set.len() >= concurrency {
+            join_set.join_next().await;
+        }
 
         let stats_repo = stats_repository.clone();
         let domain_repo = domain_repository.clone();
         let link_repo = link_repository.clone();
-        let event = ev.clone();
 
-        let op = || {
-            let stats_repo = stats_repo.clone();
-            let domain_repo = domain_repo.clone();
-            let link_repo = link_repo.clone();
-            let event = event.clone();
-
-            async move {
-                let domain_entity =
-                    domain_repo
-                        .find_by_name(&event.domain)
-                        .await?
-                        .ok_or_else(|| {
-                            AppError::not_found(
-                                format!("Domain not found: {}", event.domain),
-                                json!({ "domain": event.domain.clone() }),
-                            )
-                        })?;
-
-                let link = link_repo
-                    .find_by_code(&event.code, domain_entity.id)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::not_found(
-                            format!("Link not found: {}", event.code),
-                            json!({ "code": event.code.clone(), "domain_id": domain_entity.id }),
-                        )
-                    })?;
-
-                let new_click = NewClick {
-                    link_id: link.id,
-                    user_agent: event.user_agent,
-                    referer: event.referer,
-                    ip: event.ip,
-                };
-
-                stats_repo.record_click(new_click).await.map(|_| ())
-            }
-        };
-
-        let on_error = |e: &AppError| {
-            let transient = is_transient_error(e);
-            if transient {
-                metrics::counter!("click_worker_retried_total").increment(1);
-                tracing::warn!(
-                    domain = &event.domain,
-                    code = &event.code,
-                    error = ?e,
-                    "Click worker: transient error, retrying"
-                );
-            }
-            transient
-        };
-
-        let res = RetryIf::spawn(strategy, op, on_error).await;
-
-        match res {
-            Ok(()) => {
-                metrics::counter!("click_worker_processed_total").increment(1);
-                tracing::debug!(
-                    domain = &event.domain,
-                    code = &event.code,
-                    "Click successfully recorded"
-                );
-            }
-            Err(e) => {
-                metrics::counter!("click_worker_failed_total").increment(1);
-                metrics::counter!("click_worker_dropped_total").increment(1);
-
-                tracing::error!(
-                    error = ?e,
-                    domain = &event.domain,
-                    code = &event.code,
-                    "Click worker: failed to persist click event after retries"
-                );
-            }
-        }
+        join_set.spawn(async move {
+            process_click(ev, stats_repo, domain_repo, link_repo).await;
+        });
     }
+
+    // Drain all in-flight tasks before returning so no events are lost on shutdown.
+    while join_set.join_next().await.is_some() {}
 
     tracing::info!("Click worker stopped");
 }
@@ -173,6 +212,7 @@ mod tests {
             None,
             Utc::now(),
             Utc::now(),
+            None,
         );
         mock_domain_repo
             .expect_find_by_name()
@@ -186,6 +226,9 @@ mod tests {
             "https://example.com".to_string(),
             Some("s.example.com".to_string()),
             Utc::now(),
+            None,
+            false,
+            None,
         );
         mock_link_repo
             .expect_find_by_code()
@@ -205,7 +248,8 @@ mod tests {
         let domain_repo = Arc::new(mock_domain_repo);
         let link_repo = Arc::new(mock_link_repo);
 
-        let worker_handle = tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo));
+        let worker_handle =
+            tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo, 4));
 
         let event = ClickEvent::new(
             "s.example.com".to_string(),
@@ -237,7 +281,8 @@ mod tests {
         let domain_repo = Arc::new(mock_domain_repo);
         let link_repo = Arc::new(mock_link_repo);
 
-        let worker_handle = tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo));
+        let worker_handle =
+            tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo, 4));
 
         let event = ClickEvent::new(
             "nonexistent.com".to_string(),
@@ -266,6 +311,7 @@ mod tests {
             None,
             Utc::now(),
             Utc::now(),
+            None,
         );
         mock_domain_repo
             .expect_find_by_name()
@@ -283,7 +329,8 @@ mod tests {
         let domain_repo = Arc::new(mock_domain_repo);
         let link_repo = Arc::new(mock_link_repo);
 
-        let worker_handle = tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo));
+        let worker_handle =
+            tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo, 4));
 
         let event = ClickEvent::new(
             "s.example.com".to_string(),
@@ -312,6 +359,7 @@ mod tests {
             None,
             Utc::now(),
             Utc::now(),
+            None,
         );
         mock_domain_repo
             .expect_find_by_name()
@@ -324,6 +372,9 @@ mod tests {
             "https://example.com".to_string(),
             Some("s.example.com".to_string()),
             Utc::now(),
+            None,
+            false,
+            None,
         );
         mock_link_repo
             .expect_find_by_code()
@@ -342,7 +393,8 @@ mod tests {
         let domain_repo = Arc::new(mock_domain_repo);
         let link_repo = Arc::new(mock_link_repo);
 
-        let worker_handle = tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo));
+        let worker_handle =
+            tokio::spawn(run_click_worker(rx, stats_repo, domain_repo, link_repo, 4));
 
         for _ in 0..3 {
             let event = ClickEvent::new(

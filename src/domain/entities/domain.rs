@@ -16,24 +16,12 @@ pub struct Domain {
     pub description: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 impl Domain {
     /// Creates a new Domain instance.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let domain = Domain::new(
-    ///     1,
-    ///     "s.example.com".to_string(),
-    ///     true,
-    ///     true,
-    ///     Some("Default shortener domain".to_string()),
-    ///     Utc::now(),
-    ///     Utc::now(),
-    /// );
-    /// ```
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: i64,
         domain: String,
@@ -42,6 +30,7 @@ impl Domain {
         description: Option<String>,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
+        deleted_at: Option<DateTime<Utc>>,
     ) -> Self {
         Self {
             id,
@@ -51,7 +40,13 @@ impl Domain {
             description,
             created_at,
             updated_at,
+            deleted_at,
         }
+    }
+
+    /// Returns true if the domain has been soft-deleted.
+    pub fn is_deleted(&self) -> bool {
+        self.deleted_at.is_some()
     }
 }
 
@@ -67,12 +62,25 @@ pub struct NewDomain {
 
 /// Input data for updating an existing domain.
 ///
-/// All fields are optional to support partial updates. Use `None` to leave
-/// a field unchanged.
+/// All fields are optional to support partial updates. `None` leaves a field unchanged.
+///
+/// # `description` semantics
+///
+/// - `None` → leave unchanged
+/// - `Some(Some(s))` → set to `s`
+/// - `Some(None)` → clear (set to NULL)
+///
+/// # `is_default` semantics
+///
+/// - `Some(true)` → make this domain the system default (handled by service via transaction)
+/// - `Some(false)` → error; use `Some(true)` on another domain instead
+/// - `None` → leave unchanged
 #[derive(Debug, Clone, Default)]
 pub struct UpdateDomain {
+    pub domain: Option<String>,
+    pub is_default: Option<bool>,
     pub is_active: Option<bool>,
-    pub description: Option<String>,
+    pub description: Option<Option<String>>,
 }
 
 #[cfg(test)]
@@ -91,6 +99,7 @@ mod tests {
             Some("Default shortener domain".to_string()),
             now,
             now,
+            None,
         );
 
         assert_eq!(domain.id, 1);
@@ -101,6 +110,7 @@ mod tests {
             domain.description,
             Some("Default shortener domain".to_string())
         );
+        assert!(!domain.is_deleted());
     }
 
     #[test]
@@ -114,11 +124,27 @@ mod tests {
             None,
             now,
             now,
+            None,
         );
 
         assert!(!domain.is_default);
         assert!(!domain.is_active);
         assert!(domain.description.is_none());
+    }
+
+    #[test]
+    fn test_domain_is_deleted() {
+        let domain = Domain::new(
+            3,
+            "deleted.example.com".to_string(),
+            false,
+            true,
+            None,
+            Utc::now(),
+            Utc::now(),
+            Some(Utc::now()),
+        );
+        assert!(domain.is_deleted());
     }
 
     #[test]
@@ -139,6 +165,7 @@ mod tests {
         let update = UpdateDomain {
             is_active: Some(false),
             description: None,
+            ..Default::default()
         };
 
         assert_eq!(update.is_active, Some(false));
@@ -151,5 +178,7 @@ mod tests {
 
         assert!(update.is_active.is_none());
         assert!(update.description.is_none());
+        assert!(update.domain.is_none());
+        assert!(update.is_default.is_none());
     }
 }

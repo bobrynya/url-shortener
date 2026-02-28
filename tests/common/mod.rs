@@ -67,7 +67,10 @@ pub fn create_test_state(
     let link_service = Arc::new(LinkService::new(link_repo, domain_repo.clone()));
     let domain_service = Arc::new(DomainService::new(domain_repo));
     let stats_service = Arc::new(StatsService::new(stats_repo));
-    let auth_service = Arc::new(AuthService::new(token_repo));
+    let auth_service = Arc::new(AuthService::new(
+        token_repo,
+        "test-signing-secret".to_string(),
+    ));
 
     let state = AppState {
         link_service,

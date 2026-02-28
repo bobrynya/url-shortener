@@ -55,6 +55,7 @@ pub struct ErrorInfo {
 pub enum AppError {
     Validation { message: String, details: Value },
     NotFound { message: String, details: Value },
+    Gone { message: String, details: Value },
     Conflict { message: String, details: Value },
     Unauthorized { message: String, details: Value },
     Internal { message: String, details: Value },
@@ -85,6 +86,14 @@ impl AppError {
         }
     }
 
+    /// Creates a gone error (410 Gone) for resources that intentionally no longer exist.
+    pub fn gone(message: impl Into<String>, details: Value) -> Self {
+        Self::Gone {
+            message: message.into(),
+            details,
+        }
+    }
+
     /// Creates an internal server error (500 Internal Server Error).
     pub fn internal(message: impl Into<String>, details: Value) -> Self {
         Self::Internal {
@@ -106,6 +115,7 @@ impl AppError {
         let (code, message, details) = match self {
             AppError::Validation { message, details } => ("validation_error", message, details),
             AppError::NotFound { message, details } => ("not_found", message, details),
+            AppError::Gone { message, details } => ("gone", message, details),
             AppError::Conflict { message, details } => ("conflict", message, details),
             AppError::Unauthorized { message, details } => ("unauthorized", message, details),
             AppError::Internal { message, details } => ("internal_error", message, details),
@@ -131,6 +141,9 @@ impl IntoResponse for AppError {
             ),
             AppError::NotFound { message, details } => {
                 (StatusCode::NOT_FOUND, "not_found", message, details, false)
+            }
+            AppError::Gone { message, details } => {
+                (StatusCode::GONE, "gone", message, details, false)
             }
             AppError::Conflict { message, details } => {
                 (StatusCode::CONFLICT, "conflict", message, details, false)
@@ -324,6 +337,7 @@ impl std::fmt::Display for AppError {
         match self {
             AppError::Validation { message, .. } => write!(f, "Validation error: {}", message),
             AppError::NotFound { message, .. } => write!(f, "Not found: {}", message),
+            AppError::Gone { message, .. } => write!(f, "Gone: {}", message),
             AppError::Conflict { message, .. } => write!(f, "Conflict: {}", message),
             AppError::Unauthorized { message, .. } => write!(f, "Unauthorized: {}", message),
             AppError::Internal { message, .. } => write!(f, "Internal error: {}", message),

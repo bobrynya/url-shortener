@@ -24,4 +24,4 @@ pub mod link;
 
 pub use click::{Click, NewClick};
 pub use domain::{Domain, NewDomain, UpdateDomain};
-pub use link::{Link, NewLink};
+pub use link::{Link, LinkPatch, NewLink};

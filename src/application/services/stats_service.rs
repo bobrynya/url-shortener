@@ -112,6 +112,9 @@ mod tests {
             "https://example.com".to_string(),
             Some("s.example.com".to_string()),
             Utc::now(),
+            None,
+            false,
+            None,
         );
 
         let stats = DetailedStats {

@@ -53,6 +53,29 @@ pub struct Config {
     pub log_level: String,
     pub log_format: String,
     pub click_queue_capacity: usize,
+    /// When true, rate limiting reads client IP from X-Forwarded-For / X-Real-IP headers.
+    /// Enable only when the service is behind a trusted reverse proxy.
+    pub behind_proxy: bool,
+    /// Default TTL (seconds) for cached URL mappings in Redis.
+    /// Has no effect when Redis is not configured.
+    pub cache_ttl_seconds: u64,
+    /// Maximum number of click events processed concurrently by the background worker.
+    pub click_worker_concurrency: usize,
+    /// HMAC signing secret used to hash API tokens before storage.
+    /// Loaded from `TOKEN_SIGNING_SECRET`. Must be non-empty.
+    pub token_signing_secret: String,
+
+    // ── PgPool settings ─────────────────────────────────────────────────────
+    /// Maximum number of connections in the pool (`DB_MAX_CONNECTIONS`, default: 10).
+    pub db_max_connections: u32,
+    /// Timeout for acquiring a connection from the pool in seconds
+    /// (`DB_CONNECT_TIMEOUT`, default: 30).
+    pub db_connect_timeout: u64,
+    /// Idle connection lifetime in seconds before it is closed
+    /// (`DB_IDLE_TIMEOUT`, default: 600).
+    pub db_idle_timeout: u64,
+    /// Maximum connection lifetime in seconds (`DB_MAX_LIFETIME`, default: 1800).
+    pub db_max_lifetime: u64,
 }
 
 impl Config {
@@ -79,6 +102,43 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(10_000);
 
+        let behind_proxy = env::var("BEHIND_PROXY")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+
+        let cache_ttl_seconds = env::var("CACHE_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3600);
+
+        let click_worker_concurrency = env::var("CLICK_WORKER_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4);
+
+        let token_signing_secret =
+            env::var("TOKEN_SIGNING_SECRET").context("TOKEN_SIGNING_SECRET must be set")?;
+
+        let db_max_connections = env::var("DB_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+
+        let db_connect_timeout = env::var("DB_CONNECT_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
+        let db_idle_timeout = env::var("DB_IDLE_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600);
+
+        let db_max_lifetime = env::var("DB_MAX_LIFETIME")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800);
+
         Ok(Self {
             database_url,
             redis_url,
@@ -86,6 +146,14 @@ impl Config {
             log_level,
             log_format,
             click_queue_capacity,
+            behind_proxy,
+            cache_ttl_seconds,
+            click_worker_concurrency,
+            token_signing_secret,
+            db_max_connections,
+            db_connect_timeout,
+            db_idle_timeout,
+            db_max_lifetime,
         })
     }
 
@@ -210,6 +278,32 @@ impl Config {
             );
         }
 
+        // Validate cache TTL
+        if self.cache_ttl_seconds == 0 {
+            anyhow::bail!("CACHE_TTL_SECONDS must be greater than 0");
+        }
+
+        // Validate click worker concurrency
+        if self.click_worker_concurrency == 0 || self.click_worker_concurrency > 256 {
+            anyhow::bail!(
+                "CLICK_WORKER_CONCURRENCY must be between 1 and 256, got {}",
+                self.click_worker_concurrency
+            );
+        }
+
+        // Validate token signing secret
+        if self.token_signing_secret.is_empty() {
+            anyhow::bail!("TOKEN_SIGNING_SECRET must not be empty");
+        }
+
+        // Validate pool settings
+        if self.db_max_connections == 0 {
+            anyhow::bail!("DB_MAX_CONNECTIONS must be at least 1");
+        }
+        if self.db_connect_timeout == 0 {
+            anyhow::bail!("DB_CONNECT_TIMEOUT must be greater than 0");
+        }
+
         Ok(())
     }
 
@@ -309,6 +403,14 @@ mod tests {
             log_level: "info".to_string(),
             log_format: "text".to_string(),
             click_queue_capacity: 10_000,
+            behind_proxy: false,
+            cache_ttl_seconds: 3600,
+            click_worker_concurrency: 4,
+            token_signing_secret: "test-secret".to_string(),
+            db_max_connections: 10,
+            db_connect_timeout: 30,
+            db_idle_timeout: 600,
+            db_max_lifetime: 1800,
         };
 
         assert!(config.validate().is_ok());

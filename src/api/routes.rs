@@ -1,39 +1,46 @@
 //! API route configuration.
 //!
-//! Defines protected (authenticated) and public endpoint groups.
+//! All API endpoints require Bearer token authentication via
+//! [`crate::api::middleware::auth`].
 
 use crate::api::handlers::{
-    domain_list_handler, health_handler, shorten_handler, stats_handler, stats_list_handler,
+    create_domain_handler, delete_domain_handler, delete_link_handler, domain_list_handler,
+    shorten_handler, stats_handler, stats_list_handler, update_domain_handler, update_link_handler,
 };
 use crate::state::AppState;
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{delete, get, patch, post},
 };
 
-/// Routes requiring API token authentication.
-///
-/// Protected via [`crate::api::middleware::auth`].
+/// All API routes, protected by Bearer token authentication.
 ///
 /// # Endpoints
 ///
-/// - `GET /health` - Service health status
-/// - `GET /domains` - List configured domains
-/// - `GET /stats` - Aggregated click statistics
-/// - `GET /stats/{code}` - Detailed statistics for a specific link
+/// - `GET    /domains`        - List configured domains
+/// - `POST   /domains`        - Create a new domain
+/// - `PATCH  /domains/{id}`   - Update a domain (rename, toggle active/default, etc.)
+/// - `DELETE /domains/{id}`   - Soft-delete a domain
+/// - `GET    /stats`          - Aggregated click statistics (paginated)
+/// - `GET    /stats/{code}`   - Detailed statistics for a specific link
+/// - `POST   /shorten`        - Create shortened URLs (batch-capable)
+/// - `DELETE /links/{code}`   - Soft-delete a link
+/// - `PATCH  /links/{code}`   - Partially update a link
 pub fn protected_routes() -> Router<AppState> {
     Router::new()
-        .route("/health", get(health_handler))
-        .route("/domains", get(domain_list_handler))
+        .route(
+            "/domains",
+            get(domain_list_handler).post(create_domain_handler),
+        )
+        .route(
+            "/domains/{id}",
+            patch(update_domain_handler).delete(delete_domain_handler),
+        )
         .route("/stats", get(stats_list_handler))
         .route("/stats/{code}", get(stats_handler))
-}
-
-/// Publicly accessible routes without authentication.
-///
-/// # Endpoints
-///
-/// - `POST /shorten` - Create short links (batch-capable)
-pub fn public_routes() -> Router<AppState> {
-    Router::new().route("/shorten", post(shorten_handler))
+        .route("/shorten", post(shorten_handler))
+        .route(
+            "/links/{code}",
+            delete(delete_link_handler).patch(update_link_handler),
+        )
 }

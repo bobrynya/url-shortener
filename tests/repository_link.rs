@@ -15,6 +15,8 @@ async fn test_create_link(pool: PgPool) {
         code: "test123".to_string(),
         long_url: "https://example.com".to_string(),
         domain_id,
+        expires_at: None,
+        permanent: false,
     };
 
     let result = repo.create(new_link).await;

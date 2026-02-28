@@ -43,7 +43,7 @@ pub fn generate_code() -> String {
 ///
 /// # Rules
 ///
-/// - Length: 8-15 characters
+/// - Length: 4–50 characters
 /// - Allowed characters: lowercase letters, digits, hyphens
 /// - Cannot start or end with a hyphen
 /// - Cannot be a reserved system code
@@ -56,19 +56,19 @@ pub fn generate_code() -> String {
 ///
 /// ```ignore
 /// // Valid codes
+/// assert!(validate_custom_code("sale").is_ok());
 /// assert!(validate_custom_code("my-link-2024").is_ok());
-/// assert!(validate_custom_code("promo2025").is_ok());
 ///
 /// // Invalid codes
-/// assert!(validate_custom_code("short").is_err());        // Too short
+/// assert!(validate_custom_code("ab").is_err());           // Too short
 /// assert!(validate_custom_code("MyCode").is_err());       // Uppercase
 /// assert!(validate_custom_code("-invalid").is_err());     // Starts with hyphen
 /// assert!(validate_custom_code("admin").is_err());        // Reserved
 /// ```
 pub fn validate_custom_code(code: &str) -> Result<(), AppError> {
-    if code.len() < 8 || code.len() > 15 {
+    if code.len() < 4 || code.len() > 50 {
         return Err(AppError::bad_request(
-            "Custom code must be 8-15 characters",
+            "Custom code must be 4-50 characters",
             json!({ "provided_length": code.len() }),
         ));
     }
@@ -146,13 +146,15 @@ mod tests {
 
     #[test]
     fn test_validate_minimum_length() {
-        let result = validate_custom_code("abcd1234");
+        // 4 chars — the new minimum
+        let result = validate_custom_code("sale");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_maximum_length() {
-        let result = validate_custom_code("abcd1234567890x");
+        // 50 chars — the new maximum
+        let result = validate_custom_code("a".repeat(50).as_str());
         assert!(result.is_ok());
     }
 
@@ -160,6 +162,13 @@ mod tests {
     fn test_validate_with_hyphens_in_middle() {
         let result = validate_custom_code("my-cool-link");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_short_vanity_code() {
+        // 4-char vanity codes should be allowed
+        assert!(validate_custom_code("blog").is_ok());
+        assert!(validate_custom_code("go-2").is_ok());
     }
 
     #[test]
@@ -182,16 +191,16 @@ mod tests {
 
     #[test]
     fn test_validate_too_short() {
-        let result = validate_custom_code("abc123");
+        let result = validate_custom_code("abc");
         assert!(result.is_err());
 
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("8-15 characters"));
+        assert!(err.to_string().contains("4-50 characters"));
     }
 
     #[test]
     fn test_validate_too_long() {
-        let result = validate_custom_code("abcd1234567890xyz");
+        let result = validate_custom_code("a".repeat(51).as_str());
         assert!(result.is_err());
     }
 

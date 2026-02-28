@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use std::sync::Arc;
 
-use crate::domain::entities::{Link, NewLink};
+use crate::domain::entities::{Link, LinkPatch, NewLink};
 use crate::domain::repositories::LinkRepository;
 use crate::error::AppError;
+use serde_json::json;
 
 /// PostgreSQL repository for link storage and retrieval.
 ///
@@ -27,23 +28,28 @@ impl LinkRepository for PgLinkRepository {
     async fn create(&self, new_link: NewLink) -> Result<Link, AppError> {
         let row = sqlx::query!(
             r#"
-        WITH inserted AS (
-            INSERT INTO links (code, long_url, domain_id)
-            VALUES ($1, $2, $3)
-            RETURNING id, code, long_url, domain_id, created_at
-        )
-        SELECT
-            i.id,
-            i.code,
-            i.long_url,
-            d.domain,
-            i.created_at
-        FROM inserted i
-        LEFT JOIN domains d ON d.id = i.domain_id
-        "#,
+            WITH inserted AS (
+                INSERT INTO links (code, long_url, domain_id, expires_at, permanent)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id, code, long_url, domain_id, expires_at, permanent, deleted_at, created_at
+            )
+            SELECT
+                i.id,
+                i.code,
+                i.long_url,
+                d.domain,
+                i.expires_at,
+                i.permanent,
+                i.deleted_at,
+                i.created_at
+            FROM inserted i
+            LEFT JOIN domains d ON d.id = i.domain_id
+            "#,
             new_link.code,
             new_link.long_url,
-            new_link.domain_id
+            new_link.domain_id,
+            new_link.expires_at,
+            new_link.permanent,
         )
         .fetch_one(self.pool.as_ref())
         .await?;
@@ -54,16 +60,23 @@ impl LinkRepository for PgLinkRepository {
             row.long_url,
             row.domain,
             row.created_at,
+            row.expires_at,
+            row.permanent,
+            row.deleted_at,
         ))
     }
 
     async fn find_by_code(&self, code: &str, domain_id: i64) -> Result<Option<Link>, AppError> {
+        // Does NOT filter deleted_at — caller decides what to do with deleted links.
         let row = sqlx::query!(
             r#"
-            SELECT l.id, l.code, l.long_url, d.domain as "domain?", l.created_at
+            SELECT
+                l.id, l.code, l.long_url,
+                d.domain as "domain?",
+                l.expires_at, l.permanent, l.deleted_at, l.created_at
             FROM links l
             LEFT JOIN domains d ON d.id = l.domain_id
-            WHERE code = $1 AND domain_id = $2
+            WHERE l.code = $1 AND l.domain_id = $2
             "#,
             code,
             domain_id
@@ -71,7 +84,18 @@ impl LinkRepository for PgLinkRepository {
         .fetch_optional(self.pool.as_ref())
         .await?;
 
-        Ok(row.map(|r| Link::new(r.id, r.code, r.long_url, r.domain, r.created_at)))
+        Ok(row.map(|r| {
+            Link::new(
+                r.id,
+                r.code,
+                r.long_url,
+                r.domain,
+                r.created_at,
+                r.expires_at,
+                r.permanent,
+                r.deleted_at,
+            )
+        }))
     }
 
     async fn find_by_long_url(
@@ -79,12 +103,16 @@ impl LinkRepository for PgLinkRepository {
         long_url: &str,
         domain_id: i64,
     ) -> Result<Option<Link>, AppError> {
+        // Filters out deleted links so a new link can be created for the same URL after delete.
         let row = sqlx::query!(
             r#"
-            SELECT l.id, l.code, l.long_url, d.domain as "domain?", l.created_at
+            SELECT
+                l.id, l.code, l.long_url,
+                d.domain as "domain?",
+                l.expires_at, l.permanent, l.deleted_at, l.created_at
             FROM links l
             LEFT JOIN domains d ON d.id = l.domain_id
-            WHERE long_url = $1 AND domain_id = $2
+            WHERE l.long_url = $1 AND l.domain_id = $2 AND l.deleted_at IS NULL
             "#,
             long_url,
             domain_id
@@ -92,7 +120,18 @@ impl LinkRepository for PgLinkRepository {
         .fetch_optional(self.pool.as_ref())
         .await?;
 
-        Ok(row.map(|r| Link::new(r.id, r.code, r.long_url, r.domain, r.created_at)))
+        Ok(row.map(|r| {
+            Link::new(
+                r.id,
+                r.code,
+                r.long_url,
+                r.domain,
+                r.created_at,
+                r.expires_at,
+                r.permanent,
+                r.deleted_at,
+            )
+        }))
     }
 
     async fn list(
@@ -103,15 +142,19 @@ impl LinkRepository for PgLinkRepository {
     ) -> Result<Vec<Link>, AppError> {
         let offset = (page - 1) * page_size;
 
+        // Returns all links including soft-deleted for stats/dashboard visibility.
         let rows = sqlx::query!(
             r#"
-        SELECT l.id, l.code, l.long_url, d.domain as "domain?", l.created_at
-        FROM links l
-        LEFT JOIN domains d ON d.id = l.domain_id
-        WHERE ($1::bigint IS NULL OR domain_id = $1)
-        ORDER BY created_at DESC
-        LIMIT $2 OFFSET $3
-        "#,
+            SELECT
+                l.id, l.code, l.long_url,
+                d.domain as "domain?",
+                l.expires_at, l.permanent, l.deleted_at, l.created_at
+            FROM links l
+            LEFT JOIN domains d ON d.id = l.domain_id
+            WHERE ($1::bigint IS NULL OR l.domain_id = $1)
+            ORDER BY l.created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
             domain_id,
             page_size,
             offset
@@ -121,7 +164,18 @@ impl LinkRepository for PgLinkRepository {
 
         Ok(rows
             .into_iter()
-            .map(|r| Link::new(r.id, r.code, r.long_url, r.domain, r.created_at))
+            .map(|r| {
+                Link::new(
+                    r.id,
+                    r.code,
+                    r.long_url,
+                    r.domain,
+                    r.created_at,
+                    r.expires_at,
+                    r.permanent,
+                    r.deleted_at,
+                )
+            })
             .collect())
     }
 
@@ -137,5 +191,67 @@ impl LinkRepository for PgLinkRepository {
         };
 
         Ok(count.unwrap_or(0))
+    }
+
+    async fn soft_delete(&self, code: &str, domain_id: i64) -> Result<bool, AppError> {
+        let result = sqlx::query!(
+            r#"
+            UPDATE links
+            SET deleted_at = now()
+            WHERE code = $1 AND domain_id = $2 AND deleted_at IS NULL
+            "#,
+            code,
+            domain_id
+        )
+        .execute(self.pool.as_ref())
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn update(&self, code: &str, domain_id: i64, patch: LinkPatch) -> Result<Link, AppError> {
+        let update_expires = patch.expires_at.is_some();
+        let new_expires = patch.expires_at.and_then(|v| v);
+
+        let row = sqlx::query!(
+            r#"
+            WITH updated AS (
+                UPDATE links SET
+                    long_url   = COALESCE($3::TEXT,    long_url),
+                    expires_at = CASE WHEN $4 THEN $5::TIMESTAMPTZ ELSE expires_at END,
+                    permanent  = COALESCE($6::BOOLEAN, permanent),
+                    deleted_at = CASE WHEN $7 THEN NULL ELSE deleted_at END
+                WHERE code = $1 AND domain_id = $2
+                RETURNING id, code, long_url, domain_id, expires_at, permanent, deleted_at, created_at
+            )
+            SELECT
+                u.id, u.code, u.long_url,
+                d.domain,
+                u.expires_at, u.permanent, u.deleted_at, u.created_at
+            FROM updated u
+            LEFT JOIN domains d ON d.id = u.domain_id
+            "#,
+            code,
+            domain_id,
+            patch.url,
+            update_expires,
+            new_expires,
+            patch.permanent,
+            patch.restore,
+        )
+        .fetch_optional(self.pool.as_ref())
+        .await?
+        .ok_or_else(|| AppError::not_found("Link not found", json!({ "code": code })))?;
+
+        Ok(Link::new(
+            row.id,
+            row.code,
+            row.long_url,
+            row.domain,
+            row.created_at,
+            row.expires_at,
+            row.permanent,
+            row.deleted_at,
+        ))
     }
 }

@@ -1,6 +1,6 @@
 //! Repository trait for short link data access.
 
-use crate::domain::entities::{Link, NewLink};
+use crate::domain::entities::{Link, LinkPatch, NewLink};
 use crate::error::AppError;
 use async_trait::async_trait;
 
@@ -80,4 +80,25 @@ pub trait LinkRepository: Send + Sync {
     ///
     /// Returns [`AppError::Internal`] on database errors.
     async fn count(&self, domain_id: Option<i64>) -> Result<i64, AppError>;
+
+    /// Soft-deletes a link by setting `deleted_at = now()`.
+    ///
+    /// Returns `Ok(true)` if the link was found and deleted, `Ok(false)` if not found
+    /// or already deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Internal`] on database errors.
+    async fn soft_delete(&self, code: &str, domain_id: i64) -> Result<bool, AppError>;
+
+    /// Partially updates a link.
+    ///
+    /// Only fields present in [`LinkPatch`] are modified. `None` fields are unchanged.
+    /// When `patch.restore` is `true`, `deleted_at` is cleared.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::NotFound`] if no link matches `code` + `domain_id`.
+    /// Returns [`AppError::Internal`] on database errors.
+    async fn update(&self, code: &str, domain_id: i64, patch: LinkPatch) -> Result<Link, AppError>;
 }
